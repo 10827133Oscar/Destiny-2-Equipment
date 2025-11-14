@@ -15,6 +15,8 @@ let classes = [];
 let equipmentTypes = [];
 let equipmentTags = [];
 let attributes = [];
+let currentBuildResult = null;  // 當前搜索結果
+let currentBuildConfig = null;  // 當前搜索配置
 
 // 工具函數：防抖
 function debounce(func, wait) {
@@ -103,7 +105,7 @@ async function loadInitialData() {
 // 填充選擇框
 function populateSelects() {
     // 職業選擇
-    const classSelects = ['add-class', 'build-class', 'inventory-class'];
+    const classSelects = ['add-class', 'build-class', 'inventory-class', 'builds-class'];
     classSelects.forEach(id => {
         const select = document.getElementById(id);
         if (select) {
@@ -209,6 +211,15 @@ function setupEventListeners() {
         document.getElementById('exotic-config').style.display = e.target.checked ? 'block' : 'none';
     });
 
+    // 儲存套裝按鈕
+    document.getElementById('save-build-btn').addEventListener('click', handleSaveBuild);
+
+    // 刷新套裝列表
+    document.getElementById('refresh-builds').addEventListener('click', loadBuilds);
+    
+    // 套裝職業選擇
+    document.getElementById('builds-class').addEventListener('change', loadBuilds);
+
     // 刷新倉庫
     document.getElementById('refresh-inventory').addEventListener('click', loadInventory);
     
@@ -245,6 +256,11 @@ function setupTabs() {
             // 如果是倉庫標籤，自動載入
             if (tab === 'inventory') {
                 loadInventory();
+            }
+            
+            // 如果是我的套裝標籤，自動載入
+            if (tab === 'my-builds') {
+                loadBuilds();
             }
         });
     });
@@ -437,15 +453,326 @@ async function handleConfigureBuild(e) {
         if (result.success) {
             resultBox.className = 'result-box active success';
             resultBox.innerHTML = formatBuildResult(result);
+            
+            // 保存當前搜索結果和配置，用於儲存套裝
+            currentBuildResult = result.result;
+            currentBuildConfig = {
+                guardian_class: data.guardian_class,
+                target_attributes: data.target_attributes,
+                preferred_attr: data.preferred_attr,
+                exotic_equipment: data.exotic_equipment
+            };
+            
+            // 顯示儲存套裝容器
+            document.getElementById('save-build-container').style.display = 'block';
+            document.getElementById('build-name-input').value = '';
         } else {
             throw new Error(result.error || '配置失敗');
         }
     } catch (error) {
         resultBox.className = 'result-box active error';
         resultBox.innerHTML = `<h3>✗ 配置失敗</h3><p>${escapeHtml(error.message)}</p>`;
+        // 隱藏儲存套裝容器
+        document.getElementById('save-build-container').style.display = 'none';
+        currentBuildResult = null;
+        currentBuildConfig = null;
     } finally {
         submitBtn.disabled = false;
         submitBtn.textContent = originalText;
+    }
+}
+
+// 處理儲存套裝
+async function handleSaveBuild() {
+    if (!currentBuildResult || !currentBuildConfig) {
+        showError('請先搜索裝備組合');
+        return;
+    }
+    
+    const buildName = document.getElementById('build-name-input').value.trim();
+    if (!buildName) {
+        showError('請輸入套裝名稱');
+        return;
+    }
+    
+    const saveBtn = document.getElementById('save-build-btn');
+    const originalText = saveBtn.textContent;
+    saveBtn.disabled = true;
+    saveBtn.textContent = '儲存中...';
+    
+    try {
+        const data = {
+            name: buildName,
+            guardian_class: currentBuildConfig.guardian_class,
+            target_attributes: currentBuildConfig.target_attributes,
+            preferred_attr: currentBuildConfig.preferred_attr,
+            exotic_equipment: currentBuildConfig.exotic_equipment,
+            result: currentBuildResult
+        };
+        
+        const result = await apiRequest('/api/build/save', {
+            method: 'POST',
+            body: JSON.stringify(data)
+        });
+        
+        if (result.success) {
+            showSuccess('套裝已成功儲存');
+            document.getElementById('build-name-input').value = '';
+            // 如果當前在「我的套裝」標籤頁，刷新列表
+            const activeTab = document.querySelector('.tab-btn.active');
+            if (activeTab && activeTab.dataset.tab === 'my-builds') {
+                loadBuilds();
+            }
+        } else {
+            throw new Error(result.error || '儲存失敗');
+        }
+    } catch (error) {
+        showError('儲存套裝失敗: ' + error.message);
+    } finally {
+        saveBtn.disabled = false;
+        saveBtn.textContent = originalText;
+    }
+}
+
+// 載入套裝列表
+async function loadBuilds() {
+    const container = document.getElementById('builds-content');
+    const selectedClass = document.getElementById('builds-class').value;
+    
+    showLoading(container, '載入中...');
+    
+    try {
+        const url = selectedClass 
+            ? `/api/build/list?guardian_class=${encodeURIComponent(selectedClass)}`
+            : '/api/build/list';
+        
+        const result = await apiRequest(url);
+        
+        if (result.success) {
+            container.innerHTML = '';
+            
+            if (!result.builds || result.builds.length === 0) {
+                container.innerHTML = '<p class="empty-message">沒有保存的套裝</p>';
+                return;
+            }
+            
+            // 顯示套裝列表
+            result.builds.forEach(build => {
+                displayBuild(container, build);
+            });
+        } else {
+            throw new Error(result.error || '載入失敗');
+        }
+    } catch (error) {
+        container.innerHTML = `<p class="error">載入失敗: ${escapeHtml(error.message)}</p>`;
+    }
+}
+
+// 顯示套裝
+function displayBuild(container, build) {
+    const buildDiv = document.createElement('div');
+    buildDiv.className = 'build-item';
+    
+    // 格式化創建時間
+    let createdAt = '';
+    if (build.created_at) {
+        try {
+            const date = new Date(build.created_at);
+            createdAt = date.toLocaleString('zh-TW');
+        } catch (e) {
+            createdAt = build.created_at;
+        }
+    }
+    
+    buildDiv.innerHTML = `
+        <div class="build-header">
+            <h3 class="build-name">${escapeHtml(build.name)}</h3>
+            <div class="build-header-right">
+                <span class="build-class">${escapeHtml(build.guardian_class)}</span>
+                <button class="btn-delete btn-small" data-build-id="${escapeHtml(build.id)}" title="刪除套裝">×</button>
+            </div>
+        </div>
+        <div class="build-info">
+            <div class="build-meta">
+                ${createdAt ? `<span>創建時間: ${escapeHtml(createdAt)}</span>` : ''}
+            </div>
+            <div class="build-actions">
+                <button class="btn btn-secondary btn-small load-build-btn" data-build-id="${escapeHtml(build.id)}">載入到配置頁面</button>
+                <button class="btn btn-secondary btn-small view-build-btn" data-build-id="${escapeHtml(build.id)}">查看詳情</button>
+            </div>
+        </div>
+    `;
+    
+    container.appendChild(buildDiv);
+    
+    // 綁定載入按鈕
+    buildDiv.querySelector('.load-build-btn').addEventListener('click', () => {
+        loadBuildToConfigPage(build);
+    });
+    
+    // 綁定查看詳情按鈕
+    buildDiv.querySelector('.view-build-btn').addEventListener('click', () => {
+        viewBuildDetails(build);
+    });
+    
+    // 綁定刪除按鈕
+    buildDiv.querySelector('.btn-delete').addEventListener('click', () => {
+        showConfirm(`確定要刪除套裝 "${escapeHtml(build.name)}" 嗎？`, async () => {
+            await deleteBuild(build.id);
+        });
+    });
+}
+
+// 載入套裝到配置頁面
+function loadBuildToConfigPage(build) {
+    // 切換到配置套裝標籤
+    const buildTab = document.querySelector('[data-tab="build"]');
+    if (buildTab) {
+        buildTab.click();
+    }
+    
+    // 設置職業
+    document.getElementById('build-class').value = build.guardian_class;
+    
+    // 設置目標屬性
+    if (build.target_attributes) {
+        Object.entries(build.target_attributes).forEach(([attr, value]) => {
+            const input = document.querySelector(`input[name="target_${attr}"]`);
+            if (input) {
+                input.value = value;
+            }
+        });
+    }
+    
+    // 設置偏好屬性
+    if (build.preferred_attr) {
+        document.getElementById('preferred-attr').value = build.preferred_attr;
+    } else {
+        document.getElementById('preferred-attr').value = '';
+    }
+    
+    // 設置異域裝備
+    if (build.exotic_equipment) {
+        document.getElementById('use-exotic-check').checked = true;
+        document.getElementById('exotic-config').style.display = 'block';
+        
+        // 設置異域裝備類型
+        document.getElementById('exotic-type').value = build.exotic_equipment.type;
+        
+        // 設置異域裝備名稱
+        document.getElementById('exotic-name').value = build.exotic_equipment.name || '異域裝備';
+        
+        // 設置異域裝備屬性
+        if (build.exotic_equipment.attributes) {
+            Object.entries(build.exotic_equipment.attributes).forEach(([attr, value]) => {
+                const input = document.querySelector(`input[name="exotic_${attr}"]`);
+                if (input) {
+                    input.value = value;
+                }
+            });
+        }
+        
+        // 設置異域裝備標籤
+        if (build.exotic_equipment.tag) {
+            document.getElementById('exotic-tag').value = build.exotic_equipment.tag;
+        } else {
+            document.getElementById('exotic-tag').value = '';
+        }
+    } else {
+        document.getElementById('use-exotic-check').checked = false;
+        document.getElementById('exotic-config').style.display = 'none';
+    }
+    
+    showSuccess('套裝配置已載入，請點擊「搜索裝備組合」來搜索');
+}
+
+// 查看套裝詳情
+function viewBuildDetails(build) {
+    // 格式化套裝結果
+    if (build.result) {
+        const formattedResult = formatBuildResultFromData({
+            success: true,
+            result: build.result,
+            formatted: null
+        });
+        
+        // 顯示在彈出框或新區域
+        const detailsDiv = document.createElement('div');
+        detailsDiv.className = 'build-details-modal';
+        detailsDiv.innerHTML = `
+            <div class="modal-overlay" style="display: block;">
+                <div class="modal-dialog" style="max-width: 800px;">
+                    <div class="modal-content">
+                        <h3 class="modal-title">${escapeHtml(build.name)} - 套裝詳情</h3>
+                        <div class="build-details-content">
+                            <div class="result-box active success" style="margin: 0;">
+                                ${formattedResult}
+                            </div>
+                        </div>
+                        <div class="modal-actions">
+                            <button class="btn btn-primary modal-close">關閉</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        document.body.appendChild(detailsDiv);
+        
+        // 關閉按鈕
+        detailsDiv.querySelector('.modal-close').addEventListener('click', () => {
+            detailsDiv.remove();
+        });
+        
+        // 點擊背景關閉
+        detailsDiv.querySelector('.modal-overlay').addEventListener('click', (e) => {
+            if (e.target.classList.contains('modal-overlay')) {
+                detailsDiv.remove();
+            }
+        });
+    }
+}
+
+// 從數據格式化套裝結果（用於顯示已保存的套裝）
+function formatBuildResultFromData(data) {
+    // 如果有格式化的結果，直接使用
+    if (data.formatted) {
+        return formatBuildResult(data);
+    }
+    
+    // 否則從 result 數據生成
+    const result = data.result;
+    if (!result) {
+        return '<p>無結果數據</p>';
+    }
+    
+    // 使用現有的格式化函數
+    return formatBuildResult({
+        success: true,
+        result: result,
+        formatted: null
+    });
+}
+
+// 刪除套裝
+async function deleteBuild(buildId) {
+    try {
+        const result = await apiRequest('/api/build/delete', {
+            method: 'POST',
+            body: JSON.stringify({
+                build_id: buildId
+            })
+        });
+        
+        if (result.success) {
+            showSuccess('套裝已成功刪除');
+            // 重新載入套裝列表
+            await loadBuilds();
+        } else {
+            throw new Error(result.error || '刪除失敗');
+        }
+    } catch (error) {
+        showError('刪除套裝失敗: ' + error.message);
     }
 }
 

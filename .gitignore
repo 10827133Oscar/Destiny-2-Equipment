@@ -29,6 +29,7 @@ instance/
 
 # 數據文件
 equipment_storage.json
+build_storage.json
 
 # IDE
 .vscode/

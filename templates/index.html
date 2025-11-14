@@ -13,6 +13,7 @@
             <nav class="tabs">
                 <button class="tab-btn active" data-tab="add">添加裝備</button>
                 <button class="tab-btn" data-tab="build">配置套裝</button>
+                <button class="tab-btn" data-tab="my-builds">我的套裝</button>
                 <button class="tab-btn" data-tab="inventory">查看倉庫</button>
             </nav>
         </header>
@@ -134,6 +135,26 @@
             </form>
 
             <div id="build-result" class="result-box"></div>
+            <div id="save-build-container" style="display: none; margin-top: 20px;">
+                <div class="form-group">
+                    <label>套裝名稱</label>
+                    <input type="text" id="build-name-input" placeholder="輸入套裝名稱">
+                </div>
+                <button id="save-build-btn" class="btn btn-primary">儲存套裝</button>
+            </div>
+        </div>
+
+        <!-- 我的套裝面板 -->
+        <div id="my-builds-panel" class="panel">
+            <h2>我的套裝</h2>
+            <div class="form-group">
+                <label>選擇職業</label>
+                <select id="builds-class">
+                    <option value="">全部職業</option>
+                </select>
+            </div>
+            <button id="refresh-builds" class="btn btn-secondary">刷新</button>
+            <div id="builds-content" class="builds-content"></div>
         </div>
 
         <!-- 查看倉庫面板 -->

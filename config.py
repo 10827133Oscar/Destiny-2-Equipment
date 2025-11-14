@@ -15,6 +15,7 @@ class Config:
     
     # 數據文件
     EQUIPMENT_STORAGE_FILE = 'equipment_storage.json'
+    BUILD_STORAGE_FILE = 'build_storage.json'
     
     # API 配置
     JSON_AS_ASCII = False  # 支持中文JSON響應

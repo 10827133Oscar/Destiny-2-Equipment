@@ -855,3 +855,142 @@ header h1 {
     min-width: 100px;
 }
 
+/* 套裝列表樣式 */
+.builds-content {
+    margin-top: 20px;
+}
+
+.build-item {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 20px;
+    margin-bottom: 15px;
+    transition: all 0.3s ease;
+}
+
+.build-item:hover {
+    border-color: var(--accent-primary);
+    box-shadow: 0 4px 12px rgba(88, 166, 255, 0.15);
+}
+
+.build-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 15px;
+    padding-bottom: 15px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.build-name {
+    color: var(--text-primary);
+    font-size: 1.3em;
+    font-weight: 600;
+    margin: 0;
+}
+
+.build-header-right {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+}
+
+.build-class {
+    color: var(--accent-primary);
+    font-weight: 600;
+    padding: 5px 12px;
+    background: rgba(88, 166, 255, 0.1);
+    border: 1px solid var(--accent-primary);
+    border-radius: 4px;
+    font-size: 0.9em;
+}
+
+.build-info {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    gap: 15px;
+    flex-wrap: wrap;
+}
+
+.build-meta {
+    color: var(--text-secondary);
+    font-size: 0.9em;
+    flex: 1;
+}
+
+.build-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.btn-small {
+    padding: 8px 16px;
+    font-size: 0.9em;
+    min-width: auto;
+}
+
+.build-details-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 10000;
+}
+
+.build-details-content {
+    max-height: 60vh;
+    overflow-y: auto;
+    margin: 15px 0;
+}
+
+/* 儲存套裝容器 */
+#save-build-container {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 20px;
+    margin-top: 20px;
+}
+
+#save-build-container .form-group {
+    margin-bottom: 15px;
+}
+
+#save-build-container label {
+    display: block;
+    margin-bottom: 8px;
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+#build-name-input {
+    width: 100%;
+    padding: 10px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    color: var(--text-primary);
+    font-size: 1em;
+}
+
+#build-name-input:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.1);
+}
+
+/* 空消息樣式 */
+.empty-message {
+    text-align: center;
+    color: var(--text-secondary);
+    font-size: 1.1em;
+    padding: 40px 20px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+}
+

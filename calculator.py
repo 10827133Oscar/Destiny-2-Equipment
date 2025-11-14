@@ -288,15 +288,55 @@ class EquipmentCalculator:
                 "required_equipments": []
             }
         
+        # 限制搜索數量以避免卡頓：限制相關裝備數量
+        MAX_RELEVANT_EQUIPMENTS = 30  # 最多搜索30個相關裝備
+        if len(relevant_equipments) > MAX_RELEVANT_EQUIPMENTS:
+            # 按對目標屬性的總貢獻排序，優先選擇貢獻大的裝備
+            def calculate_contribution(eq):
+                max_level_attrs = eq.get_max_level_attributes()
+                contribution = sum(max_level_attrs.get(attr, 0) for attr in target_attributes.keys())
+                return contribution
+            
+            relevant_equipments.sort(key=calculate_contribution, reverse=True)
+            relevant_equipments = relevant_equipments[:MAX_RELEVANT_EQUIPMENTS]
+        
         # 嘗試不同數量的裝備組合（從1個到max_equipments個）
         best_combination = None
         best_score = float('inf')
         best_result = None
         best_penalty_configs = {}  # 記錄最佳組合的懲罰屬性配置
         best_preferred_value = -1  # 記錄最佳組合的偏好屬性值（用於在滿足目標後優化）
+        best_bonus_allocation = {}  # 記錄最佳加成分配
         
-        for num_equipments in range(1, min(max_equipments + 1, len(relevant_equipments) + 1)):
+        # 如果有異域裝備，一般裝備的數量應該是4個（總共5個裝備）
+        # 如果沒有異域裝備，一般裝備的數量應該是5個
+        if exotic_equipment:
+            required_regular_equipments = 4  # 4個一般裝備 + 1個異域裝備 = 5個
+            # 優先從4個裝備開始搜索，確保找到5個裝備的組合
+            # 如果找不到好的4個裝備組合，再嘗試更少的裝備
+            search_range = list(range(required_regular_equipments, 0, -1))  # 從4倒序到1
+        else:
+            required_regular_equipments = max_equipments  # 5個一般裝備
+            # 優先從5個裝備開始搜索
+            search_range = list(range(required_regular_equipments, 0, -1))  # 從5倒序到1
+        
+        # 限制搜索範圍，確保不超過裝備總數
+        search_range = [n for n in search_range if n <= len(relevant_equipments)]
+        
+        # 添加搜索計數限制
+        MAX_COMBINATIONS_TO_CHECK = 5000  # 最多檢查5000個組合
+        combinations_checked = 0
+        
+        for num_equipments in search_range:
+            # 如果已經檢查了太多組合，停止搜索
+            if combinations_checked >= MAX_COMBINATIONS_TO_CHECK:
+                break
+            
             for combo in combinations(relevant_equipments, num_equipments):
+                # 檢查組合數量限制
+                if combinations_checked >= MAX_COMBINATIONS_TO_CHECK:
+                    break
+                
                 # 找出有鎖定但沒有懲罰屬性的裝備
                 locked_equipments = [eq for eq in combo if eq.locked_attr and not eq.penalty_attr]
                 
@@ -304,8 +344,18 @@ class EquipmentCalculator:
                 if locked_equipments:
                     penalty_combinations = self._generate_penalty_combinations(locked_equipments)
                     
+                    # 限制懲罰屬性組合數量，避免過多計算
+                    MAX_PENALTY_COMBINATIONS = 20  # 最多嘗試20種懲罰屬性組合
+                    if len(penalty_combinations) > MAX_PENALTY_COMBINATIONS:
+                        penalty_combinations = penalty_combinations[:MAX_PENALTY_COMBINATIONS]
+                    
                     # 嘗試每種懲罰屬性組合
                     for penalty_config in penalty_combinations:
+                        # 檢查組合數量限制
+                        if combinations_checked >= MAX_COMBINATIONS_TO_CHECK:
+                            break
+                        
+                        combinations_checked += 1
                         # 臨時設置懲罰屬性
                         original_penalties = {}
                         for eq in locked_equipments:
@@ -344,7 +394,11 @@ class EquipmentCalculator:
                             # 獲取偏好屬性值（如果指定了偏好）
                             preferred_value = final_attributes.get(preferred_attr, 0) if preferred_attr else 0
                             
-                            # 選擇最佳組合：優先滿足目標，然後優化偏好屬性
+                            # 獲取當前組合的裝備數量（包括異域裝備）
+                            current_equipment_count = len(eq_ids) + (1 if exotic_equipment else 0)
+                            best_equipment_count = len(best_combination) + (1 if best_combination and exotic_equipment else 0) if best_combination else 0
+                            
+                            # 選擇最佳組合：優先滿足目標，然後優化偏好屬性，最後考慮裝備數量
                             is_better = False
                             if all_met:
                                 # 如果都滿足目標
@@ -355,18 +409,26 @@ class EquipmentCalculator:
                                     # 之前沒有滿足目標，現在滿足了
                                     is_better = True
                                 elif best_score == 0:
-                                    # 都滿足了目標，比較偏好屬性值
-                                    if preferred_attr:
-                                        if preferred_value > best_preferred_value:
-                                            is_better = True
-                                    else:
-                                        # 沒有偏好屬性，選擇分數更小的（更接近目標）
-                                        if score < best_score:
-                                            is_better = True
+                                    # 都滿足了目標，優先選擇裝備數量更接近所需數量的組合
+                                    if current_equipment_count > best_equipment_count:
+                                        is_better = True
+                                    elif current_equipment_count == best_equipment_count:
+                                        # 裝備數量相同，比較偏好屬性值
+                                        if preferred_attr:
+                                            if preferred_value > best_preferred_value:
+                                                is_better = True
+                                        else:
+                                            # 沒有偏好屬性，選擇分數更小的（更接近目標）
+                                            if score < best_score:
+                                                is_better = True
                             else:
-                                # 如果沒滿足目標，只比較分數
+                                # 如果沒滿足目標，優先比較分數，如果分數相近，選擇裝備數量更多的
                                 if score < best_score:
                                     is_better = True
+                                elif best_score != float('inf') and abs(score - best_score) < 10:
+                                    # 分數相近（差距小於10），優先選擇裝備數量更多的
+                                    if current_equipment_count > best_equipment_count:
+                                        is_better = True
                             
                             if is_better:
                                 best_score = score if not all_met else 0
@@ -405,6 +467,7 @@ class EquipmentCalculator:
                                     self._reapply_lock_effect(eq)
                 else:
                     # 沒有需要選擇懲罰屬性的裝備，直接計算
+                    combinations_checked += 1
                     eq_ids = [eq.id for eq in combo]
                     result = self.calculate_combination(eq_ids, guardian_class, exotic_equipment)
                     
@@ -432,7 +495,11 @@ class EquipmentCalculator:
                     # 獲取偏好屬性值（如果指定了偏好）
                     preferred_value = final_attributes.get(preferred_attr, 0) if preferred_attr else 0
                     
-                    # 選擇最佳組合：優先滿足目標，然後優化偏好屬性
+                    # 獲取當前組合的裝備數量（包括異域裝備）
+                    current_equipment_count = len(eq_ids) + (1 if exotic_equipment else 0)
+                    best_equipment_count = len(best_combination) + (1 if best_combination and exotic_equipment else 0) if best_combination else 0
+                    
+                    # 選擇最佳組合：優先滿足目標，然後優化偏好屬性，最後考慮裝備數量
                     is_better = False
                     if all_met:
                         # 如果都滿足目標
@@ -443,18 +510,26 @@ class EquipmentCalculator:
                             # 之前沒有滿足目標，現在滿足了
                             is_better = True
                         elif best_score == 0:
-                            # 都滿足了目標，比較偏好屬性值
-                            if preferred_attr:
-                                if preferred_value > best_preferred_value:
-                                    is_better = True
-                            else:
-                                # 沒有偏好屬性，選擇分數更小的（更接近目標）
-                                if score < best_score:
-                                    is_better = True
+                            # 都滿足了目標，優先選擇裝備數量更接近所需數量的組合
+                            if current_equipment_count > best_equipment_count:
+                                is_better = True
+                            elif current_equipment_count == best_equipment_count:
+                                # 裝備數量相同，比較偏好屬性值
+                                if preferred_attr:
+                                    if preferred_value > best_preferred_value:
+                                        is_better = True
+                                else:
+                                    # 沒有偏好屬性，選擇分數更小的（更接近目標）
+                                    if score < best_score:
+                                        is_better = True
                     else:
-                        # 如果沒滿足目標，只比較分數
+                        # 如果沒滿足目標，優先比較分數，如果分數相近，選擇裝備數量更多的
                         if score < best_score:
                             is_better = True
+                        elif best_score != float('inf') and abs(score - best_score) < 10:
+                            # 分數相近（差距小於10），優先選擇裝備數量更多的
+                            if current_equipment_count > best_equipment_count:
+                                is_better = True
                     
                     if is_better:
                         best_score = score if not all_met else 0
@@ -464,6 +539,7 @@ class EquipmentCalculator:
                         best_bonus_allocation = bonus_allocation.copy()
                         best_preferred_value = preferred_value
                         
+                        # 早期終止：如果找到完全匹配的結果，立即返回
                         if all_met and score == 0:
                             # 更新結果中的總屬性（包含加成）
                             best_result["total_attributes"] = final_attributes
@@ -477,6 +553,11 @@ class EquipmentCalculator:
                                 "target_attributes": target_attributes,
                                 "message": "找到完全匹配的裝備組合"
                             }
+                        
+                        # 早期終止：如果找到所有目標都滿足且分數很小的結果，也可以提前停止（可選）
+                        # 這個可以進一步優化，但可能影響結果質量，暫時註釋掉
+                        # if all_met and score < 1.0:
+                        #     break
         
         # 如果找到接近的組合
         if best_combination:
@@ -497,6 +578,9 @@ class EquipmentCalculator:
                     missing_attrs[target_attr] = target_value - actual_value
             
             if all_targets_met:
+                message = "找到達到目標的裝備組合（部分屬性超出）"
+                if combinations_checked >= MAX_COMBINATIONS_TO_CHECK:
+                    message += "（已達搜索上限，結果可能不是最優）"
                 return {
                     "found": True,
                     "combination": best_combination,
@@ -504,7 +588,7 @@ class EquipmentCalculator:
                     "penalty_configs": best_penalty_configs,
                     "bonus_allocation": best_bonus_allocation,
                     "target_attributes": target_attributes,
-                    "message": "找到達到目標的裝備組合（部分屬性超出）"
+                    "message": message
                 }
             else:
                 # 如果配不出來，分析需要的裝備（考慮加成後的屬性）
@@ -518,6 +602,9 @@ class EquipmentCalculator:
                 required_equipments = self._analyze_required_equipments(
                     target_attributes, best_result, guardian_class, adjusted_missing, exotic_type
                 )
+                message = f"無法完全達到目標，缺少屬性：{missing_attrs}"
+                if combinations_checked >= MAX_COMBINATIONS_TO_CHECK:
+                    message += "（已達搜索上限，可能還有更好的組合）"
                 return {
                     "found": False,
                     "best_combination": best_combination,
@@ -527,7 +614,7 @@ class EquipmentCalculator:
                     "target_attributes": target_attributes,
                     "missing_attributes": missing_attrs,
                     "required_equipments": required_equipments,
-                    "message": f"無法完全達到目標，缺少屬性：{missing_attrs}"
+                    "message": message
                 }
         
         # 如果完全找不到

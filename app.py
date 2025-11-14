@@ -7,7 +7,10 @@ from equipment_manager import EquipmentManager
 from classes import GuardianClass
 from equipment import EQUIPMENT_TAGS, EQUIPMENT_ATTRIBUTES
 from config import Config
+from build_storage import save_builds, load_builds
 import logging
+import uuid
+from datetime import datetime
 
 # 配置日誌
 logging.basicConfig(
@@ -261,6 +264,112 @@ def configure_build():
         return jsonify({"success": False, "error": str(e)}), 400
     except Exception as e:
         app.logger.error(f"配置套裝錯誤: {e}", exc_info=True)
+        return jsonify({"success": False, "error": f"服務器錯誤: {str(e)}"}), 500
+
+
+@app.route('/api/build/save', methods=['POST'])
+def save_build():
+    """保存套裝"""
+    if not request.is_json:
+        return jsonify({"success": False, "error": "請求必須是 JSON 格式"}), 400
+    
+    try:
+        data = request.json
+        
+        # 驗證必需字段
+        required_fields = ['name', 'guardian_class', 'result']
+        for field in required_fields:
+            if field not in data:
+                return jsonify({"success": False, "error": f"缺少必需字段: {field}"}), 400
+        
+        # 驗證名稱
+        build_name = data['name'].strip()
+        if not build_name:
+            return jsonify({"success": False, "error": "套裝名稱不能為空"}), 400
+        
+        # 加載現有套裝
+        builds = load_builds()
+        
+        # 檢查名稱是否重複
+        existing_names = [b['name'] for b in builds if b.get('guardian_class') == data['guardian_class']]
+        if build_name in existing_names:
+            return jsonify({"success": False, "error": "該職業下已存在相同名稱的套裝"}), 400
+        
+        # 創建新套裝
+        new_build = {
+            "id": str(uuid.uuid4()),
+            "name": build_name,
+            "guardian_class": data['guardian_class'],
+            "target_attributes": data.get('target_attributes', {}),
+            "preferred_attr": data.get('preferred_attr'),
+            "exotic_equipment": data.get('exotic_equipment'),
+            "result": data['result'],
+            "created_at": datetime.now().isoformat(),
+            "updated_at": datetime.now().isoformat()
+        }
+        
+        builds.append(new_build)
+        save_builds(builds)
+        
+        return jsonify({
+            "success": True,
+            "build": new_build,
+            "message": "套裝已成功保存"
+        })
+    except ValueError as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+    except Exception as e:
+        app.logger.error(f"保存套裝錯誤: {e}", exc_info=True)
+        return jsonify({"success": False, "error": f"服務器錯誤: {str(e)}"}), 500
+
+
+@app.route('/api/build/list', methods=['GET'])
+def list_builds():
+    """列出套裝"""
+    try:
+        guardian_class_str = request.args.get('guardian_class')
+        builds = load_builds()
+        
+        if guardian_class_str:
+            guardian_class = validate_guardian_class(guardian_class_str)
+            filtered_builds = [b for b in builds if b.get('guardian_class') == guardian_class.value]
+            return jsonify({"success": True, "builds": filtered_builds})
+        else:
+            return jsonify({"success": True, "builds": builds})
+    except ValueError as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+    except Exception as e:
+        app.logger.error(f"列出套裝錯誤: {e}", exc_info=True)
+        return jsonify({"success": False, "error": f"服務器錯誤: {str(e)}"}), 500
+
+
+@app.route('/api/build/delete', methods=['POST'])
+def delete_build():
+    """刪除套裝"""
+    if not request.is_json:
+        return jsonify({"success": False, "error": "請求必須是 JSON 格式"}), 400
+    
+    try:
+        data = request.json
+        
+        if 'build_id' not in data:
+            return jsonify({"success": False, "error": "缺少必需字段: build_id"}), 400
+        
+        build_id = data['build_id']
+        builds = load_builds()
+        
+        # 查找並刪除套裝
+        original_count = len(builds)
+        builds = [b for b in builds if b.get('id') != build_id]
+        
+        if len(builds) == original_count:
+            return jsonify({"success": False, "error": "套裝不存在"}), 404
+        
+        save_builds(builds)
+        
+        return jsonify({"success": True, "message": "套裝已刪除"})
+    except Exception as e:
+        app.logger.error(f"刪除套裝錯誤: {e}", exc_info=True)
         return jsonify({"success": False, "error": f"服務器錯誤: {str(e)}"}), 500
 
 
