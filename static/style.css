@@ -1,0 +1,857 @@
+/* 暗色系主題 */
+:root {
+    --bg-primary: #0d1117;
+    --bg-secondary: #161b22;
+    --bg-tertiary: #21262d;
+    --bg-hover: #30363d;
+    --text-primary: #c9d1d9;
+    --text-secondary: #8b949e;
+    --text-muted: #6e7681;
+    --border-color: #30363d;
+    --accent-primary: #58a6ff;
+    --accent-secondary: #1f6feb;
+    --accent-hover: #388bfd;
+    --success: #3fb950;
+    --warning: #d29922;
+    --error: #f85149;
+    --shadow: rgba(0, 0, 0, 0.3);
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    line-height: 1.6;
+    min-height: 100vh;
+}
+
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 20px;
+}
+
+header {
+    margin-bottom: 30px;
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 20px;
+}
+
+header h1 {
+    font-size: 2.5em;
+    margin-bottom: 20px;
+    color: var(--text-primary);
+    text-align: center;
+    text-shadow: 0 2px 4px var(--shadow);
+}
+
+.tabs {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    flex-wrap: wrap;
+}
+
+.tab-btn {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    padding: 12px 24px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 16px;
+    transition: all 0.3s ease;
+    font-weight: 500;
+}
+
+.tab-btn:hover {
+    background: var(--bg-hover);
+    border-color: var(--accent-primary);
+}
+
+.tab-btn.active {
+    background: var(--accent-secondary);
+    border-color: var(--accent-primary);
+    color: white;
+}
+
+.panel {
+    display: none;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 30px;
+    box-shadow: 0 4px 12px var(--shadow);
+}
+
+.panel.active {
+    display: block;
+    animation: fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.panel h2 {
+    margin-bottom: 25px;
+    color: var(--text-primary);
+    font-size: 1.8em;
+    border-bottom: 2px solid var(--accent-primary);
+    padding-bottom: 10px;
+}
+
+.form-group {
+    margin-bottom: 20px;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 8px;
+    color: var(--text-primary);
+    font-weight: 500;
+}
+
+.form-group input[type="text"],
+.form-group input[type="number"],
+.form-group select {
+    width: 100%;
+    padding: 10px 12px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-size: 14px;
+    transition: all 0.3s ease;
+}
+
+.form-group input[type="text"]:focus,
+.form-group input[type="number"]:focus,
+.form-group select:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.1);
+}
+
+.form-group input[type="checkbox"] {
+    margin-right: 8px;
+    width: 18px;
+    height: 18px;
+    cursor: pointer;
+}
+
+.form-group input[type="checkbox"]:disabled + select {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.info-text {
+    display: block;
+    margin-top: 5px;
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+.attributes-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 15px;
+    margin-top: 10px;
+}
+
+.attribute-input {
+    display: flex;
+    flex-direction: column;
+}
+
+.attribute-input label {
+    margin-bottom: 5px;
+    font-size: 14px;
+    color: var(--text-secondary);
+}
+
+.attribute-input input {
+    width: 100%;
+}
+
+.btn {
+    padding: 12px 24px;
+    border: none;
+    border-radius: 6px;
+    font-size: 16px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    margin-top: 10px;
+}
+
+.btn-primary {
+    background: var(--accent-secondary);
+    color: white;
+}
+
+.btn-primary:hover {
+    background: var(--accent-hover);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(31, 111, 235, 0.3);
+}
+
+.btn-secondary {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+}
+
+.btn-secondary:hover {
+    background: var(--bg-hover);
+    border-color: var(--accent-primary);
+}
+
+.exotic-config {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 20px;
+    margin: 20px 0;
+}
+
+.exotic-config h3 {
+    margin-bottom: 15px;
+    color: #d29922;
+    font-size: 1.3em;
+}
+
+.exotic-config .form-group label {
+    color: #d29922;
+}
+
+.result-box {
+    margin-top: 30px;
+    padding: 20px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    display: none;
+}
+
+.result-box.active {
+    display: block;
+}
+
+.result-box.success {
+    border-left: 4px solid var(--success);
+}
+
+.result-box.error {
+    border-left: 4px solid var(--error);
+}
+
+.result-box pre {
+    color: var(--text-primary);
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    font-family: 'Consolas', 'Monaco', monospace;
+    font-size: 13px;
+    line-height: 1.6;
+}
+
+/* 配置裝備結果樣式 */
+.build-result-container {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.build-status {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 15px 20px;
+    border-radius: 6px;
+    font-size: 16px;
+    font-weight: 500;
+    margin-bottom: 20px;
+}
+
+.build-status.success {
+    background: rgba(63, 185, 80, 0.15);
+    border: 1px solid var(--success);
+    color: var(--success);
+}
+
+.build-status.error {
+    background: rgba(248, 81, 73, 0.15);
+    border: 1px solid var(--error);
+    color: var(--error);
+}
+
+.status-icon {
+    font-size: 20px;
+    font-weight: bold;
+}
+
+.status-message {
+    flex: 1;
+}
+
+.build-section {
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 15px;
+}
+
+.build-section:last-child {
+    margin-bottom: 0;
+}
+
+.section-title {
+    color: var(--accent-primary);
+    font-size: 1.2em;
+    font-weight: 600;
+    margin: 0 0 15px 0;
+    padding-bottom: 10px;
+    border-bottom: 2px solid var(--border-color);
+}
+
+.section-title.exotic-title {
+    color: #d29922;
+}
+
+.section-content {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.info-row {
+    display: flex;
+    gap: 10px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.info-row:last-child {
+    border-bottom: none;
+}
+
+.info-key {
+    color: var(--text-secondary);
+    font-weight: 500;
+    min-width: 120px;
+}
+
+.info-value {
+    color: var(--text-primary);
+    flex: 1;
+}
+
+.info-text {
+    color: var(--text-secondary);
+    font-size: 0.95em;
+    padding: 8px 0;
+}
+
+.equipment-recommendation {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 15px;
+    margin-top: 15px;
+}
+
+.equipment-recommendation:first-child {
+    margin-top: 0;
+}
+
+.equipment-title {
+    color: var(--accent-primary);
+    font-size: 1.1em;
+    font-weight: 600;
+    margin: 0 0 12px 0;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.equipment-info-item {
+    display: flex;
+    gap: 10px;
+    padding: 6px 0;
+    font-size: 0.95em;
+}
+
+.equipment-subsection {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border-color);
+}
+
+.subsection-title {
+    color: var(--text-primary);
+    font-weight: 600;
+    font-size: 0.95em;
+    margin-bottom: 8px;
+}
+
+.subsection-items {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-left: 15px;
+}
+
+.subsection-item {
+    display: flex;
+    gap: 10px;
+    font-size: 0.9em;
+    padding: 4px 0;
+}
+
+.item-key {
+    color: var(--text-secondary);
+    min-width: 100px;
+}
+
+.item-value {
+    color: var(--text-primary);
+    flex: 1;
+}
+
+.equipment-name {
+    color: var(--text-primary);
+    font-size: 1.1em;
+    font-weight: 600;
+    margin: 10px 0 15px 0;
+    padding: 10px 15px;
+    background: var(--bg-secondary);
+    border-left: 3px solid var(--accent-primary);
+    border-radius: 4px;
+}
+
+.equipment-tag {
+    display: inline-block;
+    color: var(--accent-primary);
+    font-weight: 600;
+    font-size: 0.95em;
+    padding: 5px 12px;
+    background: rgba(88, 166, 255, 0.1);
+    border: 1px solid var(--accent-primary);
+    border-radius: 4px;
+    margin: 8px 0;
+}
+
+.inventory-content {
+    margin-top: 20px;
+}
+
+.class-section {
+    margin-bottom: 30px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 20px;
+}
+
+.class-section h3 {
+    color: var(--accent-primary);
+    margin-bottom: 15px;
+    font-size: 1.4em;
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 10px;
+}
+
+/* 裝備類型分組 */
+.equipment-type-section {
+    margin-bottom: 20px;
+}
+
+.equipment-type-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 15px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    user-select: none;
+}
+
+.equipment-type-header:hover {
+    background: var(--bg-hover);
+    border-color: var(--accent-primary);
+}
+
+.type-header-icon {
+    color: var(--accent-primary);
+    font-size: 0.9em;
+    transition: transform 0.3s ease;
+    width: 16px;
+    text-align: center;
+}
+
+.equipment-type-section.expanded .type-header-icon {
+    transform: rotate(0deg);
+}
+
+.equipment-type-section:not(.expanded) .type-header-icon {
+    transform: rotate(-90deg);
+}
+
+.type-header-title {
+    color: var(--text-primary);
+    font-weight: 600;
+    font-size: 1.1em;
+    flex: 1;
+}
+
+.type-header-count {
+    color: var(--text-secondary);
+    font-size: 0.9em;
+}
+
+.equipment-type-content {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.3s ease;
+    margin-top: 10px;
+}
+
+.equipment-type-section.expanded .equipment-type-content {
+    max-height: 10000px; /* 足夠大的值以容納所有內容 */
+}
+
+.equipment-item {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 15px;
+    margin-bottom: 15px;
+    transition: all 0.3s ease;
+}
+
+.equipment-item:hover {
+    border-color: var(--accent-primary);
+    transform: translateX(5px);
+}
+
+.equipment-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.equipment-header-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.equipment-name {
+    font-weight: 600;
+    color: var(--text-primary);
+    font-size: 1.1em;
+}
+
+.equipment-id {
+    color: var(--text-muted);
+    font-size: 0.9em;
+}
+
+.equipment-info {
+    display: flex;
+    gap: 15px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+}
+
+.equipment-info span {
+    color: var(--text-secondary);
+    font-size: 0.9em;
+}
+
+.equipment-attributes {
+    margin-top: 10px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.attribute-badge {
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    padding: 5px 10px;
+    border-radius: 4px;
+    font-size: 0.85em;
+    color: var(--text-primary);
+}
+
+.attribute-badge strong {
+    color: var(--accent-primary);
+}
+
+.btn-delete {
+    background: var(--error);
+    color: white;
+    border: none;
+    border-radius: 4px;
+    width: 28px;
+    height: 28px;
+    font-size: 20px;
+    line-height: 1;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.3s ease;
+    padding: 0;
+    font-weight: bold;
+}
+
+.btn-delete:hover {
+    background: #d73a49;
+    transform: scale(1.1);
+}
+
+.btn-delete:active {
+    transform: scale(0.95);
+}
+
+.empty-message {
+    text-align: center;
+    color: var(--text-muted);
+    padding: 40px;
+    font-size: 1.1em;
+}
+
+/* 響應式設計 */
+@media (max-width: 768px) {
+    .container {
+        padding: 10px;
+    }
+
+    header h1 {
+        font-size: 2em;
+    }
+
+    .tabs {
+        flex-direction: column;
+    }
+
+    .tab-btn {
+        width: 100%;
+    }
+
+    .panel {
+        padding: 20px;
+    }
+
+    .attributes-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* 滾動條樣式 */
+::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+::-webkit-scrollbar-track {
+    background: var(--bg-primary);
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--bg-hover);
+    border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--border-color);
+}
+
+/* 通知樣式 */
+.notification {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 15px 20px;
+    box-shadow: 0 4px 12px var(--shadow);
+    z-index: 10000;
+    max-width: 400px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    opacity: 0;
+    transform: translateX(400px);
+    transition: all 0.3s ease;
+}
+
+.notification.show {
+    opacity: 1;
+    transform: translateX(0);
+}
+
+.notification-error {
+    border-left: 4px solid var(--error);
+}
+
+.notification-success {
+    border-left: 4px solid var(--success);
+}
+
+.notification-info {
+    border-left: 4px solid var(--accent-primary);
+}
+
+.notification-icon {
+    font-size: 20px;
+    font-weight: bold;
+    flex-shrink: 0;
+}
+
+.notification-error .notification-icon {
+    color: var(--error);
+}
+
+.notification-success .notification-icon {
+    color: var(--success);
+}
+
+.notification-info .notification-icon {
+    color: var(--accent-primary);
+}
+
+.notification-message {
+    flex: 1;
+    color: var(--text-primary);
+}
+
+.notification-close {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 20px;
+    cursor: pointer;
+    padding: 0;
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    transition: all 0.2s ease;
+    flex-shrink: 0;
+}
+
+.notification-close:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+/* 加載動畫 */
+.loading-spinner {
+    text-align: center;
+    padding: 40px;
+    color: var(--text-secondary);
+    font-size: 1.1em;
+}
+
+.loading-spinner::after {
+    content: '...';
+    animation: dots 1.5s steps(4, end) infinite;
+}
+
+@keyframes dots {
+    0%, 20% { content: '.'; }
+    40% { content: '..'; }
+    60%, 100% { content: '...'; }
+}
+
+/* 模態框樣式 */
+.modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 20000;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+
+.modal-overlay.show {
+    opacity: 1;
+}
+
+.modal-dialog {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    max-width: 500px;
+    width: 90%;
+    max-height: 90vh;
+    overflow: auto;
+    transform: scale(0.9);
+    transition: transform 0.3s ease;
+}
+
+.modal-overlay.show .modal-dialog {
+    transform: scale(1);
+}
+
+.modal-content {
+    padding: 30px;
+}
+
+.modal-title {
+    color: var(--text-primary);
+    font-size: 1.5em;
+    font-weight: 600;
+    margin: 0 0 15px 0;
+    border-bottom: 2px solid var(--border-color);
+    padding-bottom: 10px;
+}
+
+.modal-message {
+    color: var(--text-primary);
+    font-size: 1.1em;
+    line-height: 1.6;
+    margin: 0 0 25px 0;
+}
+
+.modal-actions {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+}
+
+.modal-actions .btn {
+    margin: 0;
+    min-width: 100px;
+}
+

@@ -7,16 +7,39 @@ __pycache__/
 env/
 venv/
 ENV/
-.venv
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Flask
+instance/
+.webassets-cache
+
+# 數據文件
+equipment_storage.json
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
+*~
 
-# 資料檔案
-*.db
-*.sqlite
-*.json.bak
+# OS
+.DS_Store
+Thumbs.db
 
+# 日誌
+*.log

@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Destiny 2 裝備系統</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>⚔️ Destiny 2 裝備系統</h1>
+            <nav class="tabs">
+                <button class="tab-btn active" data-tab="add">添加裝備</button>
+                <button class="tab-btn" data-tab="build">配置套裝</button>
+                <button class="tab-btn" data-tab="inventory">查看倉庫</button>
+            </nav>
+        </header>
+
+        <!-- 添加裝備面板 -->
+        <div id="add-panel" class="panel active">
+            <h2>添加裝備</h2>
+            <form id="add-equipment-form">
+                <div class="form-group">
+                    <label>職業</label>
+                    <select id="add-class" name="guardian_class" required>
+                        <option value="">請選擇職業</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label>裝備類型</label>
+                    <select id="add-type" name="equipment_type" required>
+                        <option value="">請選擇裝備類型</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label>裝備標籤</label>
+                    <select id="add-tag" name="tag" required>
+                        <option value="">請選擇標籤</option>
+                    </select>
+                    <small id="tag-info" class="info-text"></small>
+                </div>
+
+                <div class="form-group">
+                    <label>隨機詞條</label>
+                    <select id="add-random-stat" name="random_stat" required>
+                        <option value="">請選擇隨機詞條</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="add-lock-check">
+                        鎖定屬性
+                    </label>
+                    <select id="add-locked-attr" name="locked_attr" disabled>
+                        <option value="">請選擇要鎖定的屬性</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label>套裝名稱（可選）</label>
+                    <input type="text" id="add-set-name" name="set_name" placeholder="留空則不屬於任何套裝">
+                </div>
+
+                <button type="submit" class="btn btn-primary">添加裝備</button>
+            </form>
+
+            <div id="add-result" class="result-box"></div>
+        </div>
+
+        <!-- 配置套裝面板 -->
+        <div id="build-panel" class="panel">
+            <h2>配置套裝</h2>
+            <form id="build-form">
+                <div class="form-group">
+                    <label>職業</label>
+                    <select id="build-class" name="guardian_class" required>
+                        <option value="">請選擇職業</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label>目標屬性</label>
+                    <div class="attributes-grid" id="target-attributes">
+                        <!-- 動態生成 -->
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>偏好屬性（可選）</label>
+                    <select id="preferred-attr" name="preferred_attr">
+                        <option value="">無偏好</option>
+                    </select>
+                    <small class="info-text">達成配置要求後，多餘的數值會盡量點高此屬性</small>
+                </div>
+
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="use-exotic-check">
+                        使用異域裝備
+                    </label>
+                </div>
+
+                <div id="exotic-config" class="exotic-config" style="display: none;">
+                    <h3>異域裝備配置</h3>
+                    <div class="form-group">
+                        <label>裝備類型</label>
+                        <select id="exotic-type" name="exotic_type">
+                            <option value="">請選擇裝備類型</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>裝備名稱</label>
+                        <input type="text" id="exotic-name" placeholder="異域裝備名稱">
+                    </div>
+                    <div class="form-group">
+                        <label>屬性值</label>
+                        <div class="attributes-grid" id="exotic-attributes">
+                            <!-- 動態生成 -->
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>裝備標籤（可選）</label>
+                        <select id="exotic-tag" name="exotic_tag">
+                            <option value="">不使用標籤</option>
+                        </select>
+                    </div>
+                </div>
+
+                <button type="submit" class="btn btn-primary">搜索裝備組合</button>
+            </form>
+
+            <div id="build-result" class="result-box"></div>
+        </div>
+
+        <!-- 查看倉庫面板 -->
+        <div id="inventory-panel" class="panel">
+            <h2>查看倉庫</h2>
+            <div class="form-group">
+                <label>選擇職業</label>
+                <select id="inventory-class">
+                    <option value="">全部職業</option>
+                </select>
+            </div>
+            <button id="refresh-inventory" class="btn btn-secondary">刷新</button>
+            <div id="inventory-content" class="inventory-content"></div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
+
