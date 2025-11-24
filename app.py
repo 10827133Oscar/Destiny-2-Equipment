@@ -20,7 +20,19 @@ logging.basicConfig(
 
 app = Flask(__name__)
 app.config.from_object(Config)
-CORS(app)
+app.config['MAX_CONTENT_LENGTH'] = Config.MAX_CONTENT_LENGTH
+
+# 配置 CORS - 限制允許的來源
+CORS(app, origins=Config.CORS_ORIGINS, supports_credentials=True)
+
+
+@app.after_request
+def add_security_headers(response):
+    """添加安全響應頭"""
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'SAMEORIGIN'
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    return response
 
 # 全局裝備管理器
 manager = EquipmentManager()
@@ -41,6 +53,29 @@ def validate_equipment_type(equipment_type: str) -> None:
     """驗證裝備類型"""
     if equipment_type not in EQUIPMENT_TYPES:
         raise ValueError(f"無效的裝備類型: {equipment_type}")
+
+
+def validate_json_request(req, required_fields=None):
+    """驗證 JSON 請求和必需字段
+
+    Args:
+        req: Flask request 對象
+        required_fields: 必需字段列表（可選）
+
+    Returns:
+        (data, error_response) - 如果驗證成功返回 (data, None)，否則返回 (None, error_response)
+    """
+    if not req.is_json:
+        return None, (jsonify({"success": False, "error": "請求必須是 JSON 格式"}), 400)
+
+    data = req.json
+
+    if required_fields:
+        for field in required_fields:
+            if field not in data or not data[field]:
+                return None, (jsonify({"success": False, "error": f"缺少必需字段: {field}"}), 400)
+
+    return data, None
 
 
 @app.route('/')
@@ -85,17 +120,13 @@ def get_attributes():
 @app.route('/api/equipment/add', methods=['POST'])
 def add_equipment():
     """添加裝備"""
-    if not request.is_json:
-        return jsonify({"success": False, "error": "請求必須是 JSON 格式"}), 400
-    
+    data, error = validate_json_request(
+        request, ['guardian_class', 'equipment_type', 'tag', 'random_stat']
+    )
+    if error:
+        return error
+
     try:
-        data = request.json
-        
-        # 驗證必需字段
-        required_fields = ['guardian_class', 'equipment_type', 'tag', 'random_stat']
-        for field in required_fields:
-            if field not in data or not data[field]:
-                return jsonify({"success": False, "error": f"缺少必需字段: {field}"}), 400
         
         # 驗證並轉換數據
         guardian_class = validate_guardian_class(data['guardian_class'])
@@ -161,17 +192,13 @@ def list_equipments():
 @app.route('/api/equipment/delete', methods=['POST'])
 def delete_equipment():
     """刪除裝備"""
-    if not request.is_json:
-        return jsonify({"success": False, "error": "請求必須是 JSON 格式"}), 400
-    
+    data, error = validate_json_request(
+        request, ['guardian_class', 'equipment_id']
+    )
+    if error:
+        return error
+
     try:
-        data = request.json
-        
-        # 驗證必需字段
-        if 'guardian_class' not in data:
-            return jsonify({"success": False, "error": "缺少必需字段: guardian_class"}), 400
-        if 'equipment_id' not in data:
-            return jsonify({"success": False, "error": "缺少必需字段: equipment_id"}), 400
         
         guardian_class = validate_guardian_class(data['guardian_class'])
         equipment_id = data['equipment_id']
@@ -194,15 +221,11 @@ def delete_equipment():
 @app.route('/api/build/configure', methods=['POST'])
 def configure_build():
     """配置套裝"""
-    if not request.is_json:
-        return jsonify({"success": False, "error": "請求必須是 JSON 格式"}), 400
-    
+    data, error = validate_json_request(request, ['guardian_class'])
+    if error:
+        return error
+
     try:
-        data = request.json
-        
-        # 驗證必需字段
-        if 'guardian_class' not in data:
-            return jsonify({"success": False, "error": "缺少必需字段: guardian_class"}), 400
         
         guardian_class = validate_guardian_class(data['guardian_class'])
         target_attributes = data.get('target_attributes', {})
@@ -248,9 +271,20 @@ def configure_build():
         preferred_attr = data.get('preferred_attr')
         if preferred_attr and preferred_attr not in EQUIPMENT_ATTRIBUTES:
             return jsonify({"success": False, "error": f"無效的偏好屬性: {preferred_attr}"}), 400
-        
+
+        # 處理碎片修正
+        fragment_corrections = {}
+        if data.get('use_fragment'):
+            fragment_data = data.get('fragment_corrections', {})
+            for attr, value in fragment_data.items():
+                if attr not in EQUIPMENT_ATTRIBUTES:
+                    return jsonify({"success": False, "error": f"無效的碎片修正屬性: {attr}"}), 400
+                if not isinstance(value, (int, float)):
+                    return jsonify({"success": False, "error": f"碎片修正值必須是數字: {attr}"}), 400
+                fragment_corrections[attr] = value
+
         # 配置套裝
-        result = manager.configure_build(guardian_class, target_attributes, exotic_equipment, preferred_attr)
+        result = manager.configure_build(guardian_class, target_attributes, exotic_equipment, preferred_attr, fragment_corrections)
         
         # 格式化結果
         formatted_result = manager.get_calculator().format_target_result(result)
@@ -270,22 +304,20 @@ def configure_build():
 @app.route('/api/build/save', methods=['POST'])
 def save_build():
     """保存套裝"""
-    if not request.is_json:
-        return jsonify({"success": False, "error": "請求必須是 JSON 格式"}), 400
-    
+    data, error = validate_json_request(
+        request, ['name', 'guardian_class', 'result']
+    )
+    if error:
+        return error
+
     try:
-        data = request.json
-        
-        # 驗證必需字段
-        required_fields = ['name', 'guardian_class', 'result']
-        for field in required_fields:
-            if field not in data:
-                return jsonify({"success": False, "error": f"缺少必需字段: {field}"}), 400
         
         # 驗證名稱
         build_name = data['name'].strip()
         if not build_name:
             return jsonify({"success": False, "error": "套裝名稱不能為空"}), 400
+        if len(build_name) > Config.MAX_BUILD_NAME_LENGTH:
+            return jsonify({"success": False, "error": f"套裝名稱不能超過 {Config.MAX_BUILD_NAME_LENGTH} 個字符"}), 400
         
         # 加載現有套裝
         builds = load_builds()
@@ -303,6 +335,7 @@ def save_build():
             "target_attributes": data.get('target_attributes', {}),
             "preferred_attr": data.get('preferred_attr'),
             "exotic_equipment": data.get('exotic_equipment'),
+            "fragment_corrections": data.get('fragment_corrections', {}),
             "result": data['result'],
             "created_at": datetime.now().isoformat(),
             "updated_at": datetime.now().isoformat()
@@ -346,14 +379,11 @@ def list_builds():
 @app.route('/api/build/delete', methods=['POST'])
 def delete_build():
     """刪除套裝"""
-    if not request.is_json:
-        return jsonify({"success": False, "error": "請求必須是 JSON 格式"}), 400
-    
+    data, error = validate_json_request(request, ['build_id'])
+    if error:
+        return error
+
     try:
-        data = request.json
-        
-        if 'build_id' not in data:
-            return jsonify({"success": False, "error": "缺少必需字段: build_id"}), 400
         
         build_id = data['build_id']
         builds = load_builds()

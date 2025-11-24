@@ -332,6 +332,84 @@ header h1 {
     color: #d29922;
 }
 
+.section-title.replacement-title {
+    color: #4ecdc4;
+}
+
+/* 替換建議容器樣式 */
+.replacement-container {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+}
+
+.replacement-item {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 15px;
+}
+
+.replacement-item-title {
+    color: var(--accent-primary);
+    font-weight: 600;
+    margin-bottom: 10px;
+    font-size: 1.05em;
+}
+
+.replacement-detail {
+    display: flex;
+    gap: 10px;
+    padding: 5px 0;
+}
+
+.replacement-detail-text {
+    color: var(--text-secondary);
+    padding: 5px 0;
+}
+
+.detail-key {
+    color: var(--text-secondary);
+    font-weight: 500;
+    min-width: 100px;
+}
+
+.detail-value {
+    color: var(--text-primary);
+    flex: 1;
+}
+
+.replacement-total {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--accent-primary);
+    border-radius: 6px;
+    padding: 15px;
+    margin-top: 10px;
+}
+
+.replacement-total-title {
+    color: var(--accent-primary);
+    font-weight: 600;
+    margin-bottom: 10px;
+    font-size: 1.05em;
+}
+
+.replacement-total-item {
+    display: flex;
+    gap: 10px;
+    padding: 3px 0;
+}
+
+.replacement-total-item .item-key {
+    color: var(--text-secondary);
+    font-weight: 500;
+    min-width: 80px;
+}
+
+.replacement-total-item .item-value {
+    color: var(--text-primary);
+}
+
 .section-content {
     display: flex;
     flex-direction: column;

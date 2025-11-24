@@ -8,12 +8,16 @@
 - 列出和管理裝備
 - 刪除裝備
 """
+import logging
 from typing import Dict, Optional, List
 from equipment import Equipment, EQUIPMENT_TAGS, EQUIPMENT_ATTRIBUTES, STAT_TYPE_RANDOM
 from inventory import ClassInventoryManager
 from calculator import EquipmentCalculator
 from classes import GuardianClass
 from storage import save_equipments, load_equipments
+from config import Config
+
+logger = logging.getLogger(__name__)
 
 
 class EquipmentManager:
@@ -24,9 +28,26 @@ class EquipmentManager:
         self.inventory_manager = ClassInventoryManager()
         self.calculator = EquipmentCalculator(self.inventory_manager)
         self.equipment_counter = {}  # 用於生成唯一ID
-        
+        self._equipment_index = {}  # 裝備索引，用於 O(1) 快速查重
+
         # 從文件加載已保存的裝備
         self._load_from_storage()
+
+    def _get_equipment_key(self, guardian_class: GuardianClass, equipment_type: str,
+                          tag: str, random_stat: str, locked_attr: Optional[str]) -> str:
+        """生成裝備唯一鍵值用於查重
+
+        Args:
+            guardian_class: 職業
+            equipment_type: 裝備類型
+            tag: 標籤
+            random_stat: 隨機詞條
+            locked_attr: 鎖定屬性
+
+        Returns:
+            唯一鍵值字符串
+        """
+        return f"{guardian_class.value}|{equipment_type}|{tag}|{random_stat}|{locked_attr or 'None'}"
     
     def add_equipment_simple(self, 
                             guardian_class: GuardianClass,
@@ -53,9 +74,8 @@ class EquipmentManager:
             raise ValueError(f"未知的裝備標籤: {tag}，可用標籤: {list(EQUIPMENT_TAGS.keys())}")
         
         # 驗證裝備類型
-        valid_types = ["頭盔", "臂鎧", "胸鎧", "護腿", "職業物品"]
-        if equipment_type not in valid_types:
-            raise ValueError(f"未知的裝備類型: {equipment_type}，可用類型: {valid_types}")
+        if equipment_type not in Config.EQUIPMENT_TYPES:
+            raise ValueError(f"未知的裝備類型: {equipment_type}，可用類型: {Config.EQUIPMENT_TYPES}")
         
         # 驗證隨機詞條屬性
         if random_stat not in EQUIPMENT_ATTRIBUTES:
@@ -68,23 +88,10 @@ class EquipmentManager:
         if random_stat == main_attr or random_stat == sub_attr:
             raise ValueError(f"隨機詞條不能與主詞條({main_attr})或副詞條({sub_attr})重複")
         
-        # 檢查是否已存在相同裝備（類型、標籤、隨機詞條、鎖定屬性都相同）
-        inventory = self.inventory_manager.get_inventory(guardian_class)
-        existing_equipments = inventory.get_all_equipments()
-        
-        for existing_eq in existing_equipments:
-            # 獲取現有裝備的隨機詞條屬性
-            existing_random_stat = None
-            for attr, stat_type in existing_eq.stat_tags.items():
-                if stat_type == STAT_TYPE_RANDOM:
-                    existing_random_stat = attr
-                    break
-            
-            if (existing_eq.type == equipment_type and
-                existing_eq.tag == tag and
-                existing_random_stat == random_stat and
-                existing_eq.locked_attr == locked_attr):
-                raise ValueError("倉庫中已存在相同裝備")
+        # 使用索引進行 O(1) 快速查重
+        eq_key = self._get_equipment_key(guardian_class, equipment_type, tag, random_stat, locked_attr)
+        if eq_key in self._equipment_index:
+            raise ValueError("倉庫中已存在相同裝備")
         
         # 生成唯一ID
         class_key = guardian_class.value
@@ -121,20 +128,25 @@ class EquipmentManager:
         
         # 添加到倉庫
         self.inventory_manager.add_equipment(equipment)
-        
+
+        # 更新索引
+        self._equipment_index[eq_key] = equipment.id
+
         # 保存到文件
         self._save_to_storage()
-        
+
         return equipment
     
-    def configure_build(self, 
+    def configure_build(self,
                        guardian_class: GuardianClass,
                        target_attributes: Dict[str, float],
                        exotic_equipment: Optional[Dict] = None,
-                       preferred_attr: Optional[str] = None) -> Dict:
+                       preferred_attr: Optional[str] = None,
+                       fragment_corrections: Optional[Dict[str, float]] = None) -> Dict:
         """配置套裝"""
         return self.calculator.find_combination_by_target(
-            target_attributes, guardian_class, exotic_equipment=exotic_equipment, preferred_attr=preferred_attr
+            target_attributes, guardian_class, exotic_equipment=exotic_equipment,
+            preferred_attr=preferred_attr, fragment_corrections=fragment_corrections
         )
     
     def get_inventory_manager(self) -> ClassInventoryManager:
@@ -172,16 +184,29 @@ class EquipmentManager:
         """
         inventory = self.inventory_manager.get_inventory(guardian_class)
         equipment = inventory.get_equipment(equipment_id)
-        
+
         if equipment is None:
             return False
-        
+
+        # 從索引中移除
+        existing_random_stat = None
+        for attr, stat_type in equipment.stat_tags.items():
+            if stat_type == STAT_TYPE_RANDOM:
+                existing_random_stat = attr
+                break
+        if existing_random_stat:
+            eq_key = self._get_equipment_key(
+                guardian_class, equipment.type, equipment.tag,
+                existing_random_stat, equipment.locked_attr
+            )
+            self._equipment_index.pop(eq_key, None)
+
         # 從倉庫移除裝備
         self.inventory_manager.remove_equipment(equipment_id, guardian_class)
-        
+
         # 保存到文件
         self._save_to_storage()
-        
+
         return True
     
     def _load_from_storage(self) -> None:
@@ -191,8 +216,8 @@ class EquipmentManager:
             for equipment in equipments:
                 # 添加到倉庫
                 self.inventory_manager.add_equipment(equipment)
-                
-                # 更新計數器（確保新添加的裝備ID不會重複）
+
+                # 更新計數器和索引
                 if equipment.class_restriction:
                     for gc in equipment.class_restriction:
                         class_key = gc.value
@@ -200,7 +225,7 @@ class EquipmentManager:
                             self.equipment_counter[class_key] = {}
                         if equipment.type not in self.equipment_counter[class_key]:
                             self.equipment_counter[class_key][equipment.type] = 0
-                        
+
                         # 從ID中提取編號
                         try:
                             parts = equipment.id.split('_')
@@ -212,8 +237,21 @@ class EquipmentManager:
                                     self.equipment_counter[class_key][equipment.type] = num
                         except (ValueError, IndexError):
                             pass
+
+                        # 構建索引
+                        random_stat = None
+                        for attr, stat_type in equipment.stat_tags.items():
+                            if stat_type == STAT_TYPE_RANDOM:
+                                random_stat = attr
+                                break
+                        if random_stat:
+                            eq_key = self._get_equipment_key(
+                                gc, equipment.type, equipment.tag,
+                                random_stat, equipment.locked_attr
+                            )
+                            self._equipment_index[eq_key] = equipment.id
         except Exception as e:
-            print(f"警告：加載裝備數據失敗: {e}")
+            logger.warning(f"加載裝備數據失敗: {e}")
     
     def _save_to_storage(self) -> None:
         """保存所有裝備到存儲文件"""
@@ -230,5 +268,5 @@ class EquipmentManager:
             
             save_equipments(all_equipments)
         except Exception as e:
-            print(f"警告：保存裝備數據失敗: {e}")
+            logger.warning(f"保存裝備數據失敗: {e}")
 

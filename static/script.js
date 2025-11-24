@@ -43,24 +43,39 @@ function throttle(func, limit) {
     };
 }
 
-// 工具函數：安全的 API 請求
+// API 超時配置（毫秒）
+const API_TIMEOUT = 30000;  // 30秒超時
+
+// 工具函數：安全的 API 請求（含超時機制）
 async function apiRequest(url, options = {}) {
+    // 創建 AbortController 用於超時控制
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), options.timeout || API_TIMEOUT);
+
     try {
         const response = await fetch(`${API_BASE}${url}`, {
             ...options,
+            signal: controller.signal,
             headers: {
                 'Content-Type': 'application/json',
                 ...options.headers
             }
         });
-        
+
+        clearTimeout(timeoutId);
+
         if (!response.ok) {
             const error = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
             throw new Error(error.error || `請求失敗: ${response.status}`);
         }
-        
+
         return await response.json();
     } catch (error) {
+        clearTimeout(timeoutId);
+
+        if (error.name === 'AbortError') {
+            throw new Error('請求超時，請稍後重試');
+        }
         if (error.name === 'TypeError' && error.message.includes('fetch')) {
             throw new Error('無法連接到服務器，請確認服務器正在運行');
         }
@@ -188,6 +203,18 @@ function setupAttributeInputs() {
         `;
         exoticContainer.appendChild(div);
     });
+
+    // 碎片修正屬性
+    const fragmentContainer = document.getElementById('fragment-attributes');
+    attributes.forEach(attr => {
+        const div = document.createElement('div');
+        div.className = 'attribute-input';
+        div.innerHTML = `
+            <label>${attr}</label>
+            <input type="number" name="fragment_${attr}" step="1" placeholder="0">
+        `;
+        fragmentContainer.appendChild(div);
+    });
 }
 
 // 設置事件監聽器
@@ -206,6 +233,11 @@ function setupEventListeners() {
     // 配置套裝表單
     document.getElementById('build-form').addEventListener('submit', handleConfigureBuild);
     
+    // 碎片修正複選框
+    document.getElementById('use-fragment-check').addEventListener('change', (e) => {
+        document.getElementById('fragment-config').style.display = e.target.checked ? 'block' : 'none';
+    });
+
     // 異域裝備複選框
     document.getElementById('use-exotic-check').addEventListener('change', (e) => {
         document.getElementById('exotic-config').style.display = e.target.checked ? 'block' : 'none';
@@ -404,11 +436,25 @@ async function handleConfigureBuild(e) {
             guardian_class: document.getElementById('build-class').value,
             target_attributes: targetAttributes,
             preferred_attr: document.getElementById('preferred-attr').value || null,
-            use_exotic: document.getElementById('use-exotic-check').checked
+            use_exotic: document.getElementById('use-exotic-check').checked,
+            use_fragment: document.getElementById('use-fragment-check').checked
         };
-        
+
         if (!data.guardian_class) {
             throw new Error('請選擇職業');
+        }
+
+        // 如果有碎片修正
+        if (data.use_fragment) {
+            const fragmentCorrections = {};
+            attributes.forEach(attr => {
+                const input = document.querySelector(`input[name="fragment_${attr}"]`);
+                const value = parseFloat(input.value);
+                if (!isNaN(value) && value !== 0) {
+                    fragmentCorrections[attr] = value;
+                }
+            });
+            data.fragment_corrections = fragmentCorrections;
         }
         
         // 如果有異域裝備
@@ -460,7 +506,8 @@ async function handleConfigureBuild(e) {
                 guardian_class: data.guardian_class,
                 target_attributes: data.target_attributes,
                 preferred_attr: data.preferred_attr,
-                exotic_equipment: data.exotic_equipment
+                exotic_equipment: data.exotic_equipment,
+                fragment_corrections: data.fragment_corrections
             };
             
             // 顯示儲存套裝容器
@@ -651,17 +698,41 @@ function loadBuildToConfigPage(build) {
         document.getElementById('preferred-attr').value = '';
     }
     
+    // 設置碎片修正
+    if (build.fragment_corrections && Object.keys(build.fragment_corrections).length > 0) {
+        document.getElementById('use-fragment-check').checked = true;
+        document.getElementById('fragment-config').style.display = 'block';
+
+        // 設置碎片修正屬性
+        Object.entries(build.fragment_corrections).forEach(([attr, value]) => {
+            const input = document.querySelector(`input[name="fragment_${attr}"]`);
+            if (input) {
+                input.value = value;
+            }
+        });
+    } else {
+        document.getElementById('use-fragment-check').checked = false;
+        document.getElementById('fragment-config').style.display = 'none';
+        // 清空碎片修正輸入
+        attributes.forEach(attr => {
+            const input = document.querySelector(`input[name="fragment_${attr}"]`);
+            if (input) {
+                input.value = '';
+            }
+        });
+    }
+
     // 設置異域裝備
     if (build.exotic_equipment) {
         document.getElementById('use-exotic-check').checked = true;
         document.getElementById('exotic-config').style.display = 'block';
-        
+
         // 設置異域裝備類型
         document.getElementById('exotic-type').value = build.exotic_equipment.type;
-        
+
         // 設置異域裝備名稱
         document.getElementById('exotic-name').value = build.exotic_equipment.name || '異域裝備';
-        
+
         // 設置異域裝備屬性
         if (build.exotic_equipment.attributes) {
             Object.entries(build.exotic_equipment.attributes).forEach(([attr, value]) => {
@@ -671,7 +742,7 @@ function loadBuildToConfigPage(build) {
                 }
             });
         }
-        
+
         // 設置異域裝備標籤
         if (build.exotic_equipment.tag) {
             document.getElementById('exotic-tag').value = build.exotic_equipment.tag;
@@ -1039,72 +1110,158 @@ function formatBuildResult(result) {
 // 渲染區塊
 function renderSection(title, content) {
     if (content.length === 0) return '';
-    
+
     const html = [];
     html.push(`<div class="build-section">`);
     // 檢查是否為異域裝備標題（格式：部位-異域裝備）
     const isExoticTitle = title.includes('-異域裝備');
-    const titleClass = isExoticTitle ? 'section-title exotic-title' : 'section-title';
+    // 檢查是否為替換建議區塊
+    const isReplacementSection = title.includes('需替換') && title.includes('件裝備達成目標');
+    const titleClass = isExoticTitle ? 'section-title exotic-title' :
+                       isReplacementSection ? 'section-title replacement-title' : 'section-title';
     html.push(`  <h3 class="${titleClass}">${escapeHtml(title)}</h3>`);
     html.push(`  <div class="section-content">`);
-    
+
     // 解析內容
     let inEquipment = false;
     let equipmentLines = [];
     let equipmentIndex = 0;
     let equipmentName = null;
-    
+
     // 檢查是否為裝備詳情區塊（標題是裝備部位或【部位-異域裝備】）
     const equipmentTypes = ['頭盔', '臂鎧', '胸鎧', '護腿', '職業物品'];
-    const isEquipmentDetail = equipmentTypes.includes(title) || 
+    const isEquipmentDetail = equipmentTypes.includes(title) ||
                                equipmentTypes.some(type => title === `${type}-異域裝備`);
-    
-    for (const line of content) {
-        // 檢測裝備項目（以數字開頭，如 "1. 裝備名稱"）
-        if (line.match(/^\s*\d+\.\s+/)) {
-            if (inEquipment && equipmentLines.length > 0) {
-                html.push(renderEquipmentItem(equipmentIndex, equipmentLines));
-                equipmentLines = [];
-            }
-            inEquipment = true;
-            equipmentIndex++;
-            equipmentLines.push(line);
-        } else if (inEquipment) {
-            equipmentLines.push(line);
-        } else if (isEquipmentDetail && !line.includes(':')) {
+
+    // 替換建議區塊特殊處理 - 所有內容在同一個格子內
+    if (isReplacementSection) {
+        html.push(`    <div class="replacement-container">`);
+        let allReplacements = [];
+        let currentReplacement = null;
+        let inReplacementTotal = false;
+
+        for (const line of content) {
             const trimmedLine = line.trim();
-            // 檢測特殊標記（如【異域裝備】）
-            if (trimmedLine.match(/^【.*】$/)) {
-                const tagText = trimmedLine.replace(/【|】/g, '');
-                html.push(`    <div class="equipment-tag">${escapeHtml(tagText)}</div>`);
-            } else if (!equipmentName && trimmedLine) {
-                // 第一行非冒號、非標題的行是裝備名稱
-                equipmentName = trimmedLine;
-                html.push(`    <div class="equipment-name">${escapeHtml(equipmentName)}</div>`);
-            } else if (trimmedLine) {
-                // 其他非鍵值對的文本
-                html.push(`    <div class="info-text">${escapeHtml(trimmedLine)}</div>`);
-            }
-        } else {
-            // 普通內容行
-            if (line.includes(':')) {
-                const [key, ...valueParts] = line.split(':');
-                const value = valueParts.join(':').trim();
-                html.push(`    <div class="info-row">`);
-                html.push(`      <span class="info-key">${escapeHtml(key.trim())}:</span>`);
-                html.push(`      <span class="info-value">${escapeHtml(value)}</span>`);
-                html.push(`    </div>`);
-            } else if (line.trim()) {
-                html.push(`    <div class="info-text">${escapeHtml(line.trim())}</div>`);
+
+            // 檢測替換項目開始（以數字開頭，如 "1. 替換 頭盔:"）
+            if (trimmedLine.match(/^\d+\.\s+替換/)) {
+                if (currentReplacement) {
+                    allReplacements.push(currentReplacement);
+                }
+                currentReplacement = {
+                    title: trimmedLine.replace(/^\d+\.\s+/, ''),
+                    details: []
+                };
+                inReplacementTotal = false;
+            } else if (trimmedLine.startsWith('【替換後總屬性】')) {
+                // 替換後總屬性
+                if (currentReplacement) {
+                    allReplacements.push(currentReplacement);
+                    currentReplacement = null;
+                }
+                inReplacementTotal = true;
+                html.push(`      <div class="replacement-total">`);
+                html.push(`        <div class="replacement-total-title">替換後總屬性</div>`);
+            } else if (inReplacementTotal) {
+                // 在替換後總屬性區塊內
+                if (trimmedLine.includes(':')) {
+                    const [key, ...valueParts] = trimmedLine.split(':');
+                    const value = valueParts.join(':').trim();
+                    html.push(`        <div class="replacement-total-item">`);
+                    html.push(`          <span class="item-key">${escapeHtml(key.trim())}:</span>`);
+                    html.push(`          <span class="item-value">${escapeHtml(value)}</span>`);
+                    html.push(`        </div>`);
+                }
+            } else if (currentReplacement) {
+                // 收集當前替換項目的詳情
+                if (trimmedLine) {
+                    currentReplacement.details.push(trimmedLine);
+                }
             }
         }
+
+        // 處理最後一個替換項目
+        if (currentReplacement) {
+            allReplacements.push(currentReplacement);
+        }
+
+        // 渲染所有替換項目
+        for (let i = 0; i < allReplacements.length; i++) {
+            const rep = allReplacements[i];
+            html.push(`      <div class="replacement-item">`);
+            html.push(`        <div class="replacement-item-title">${i + 1}. ${escapeHtml(rep.title)}</div>`);
+
+            for (const detail of rep.details) {
+                if (detail.includes(':')) {
+                    const [key, ...valueParts] = detail.split(':');
+                    const value = valueParts.join(':').trim();
+                    html.push(`        <div class="replacement-detail">`);
+                    html.push(`          <span class="detail-key">${escapeHtml(key.trim())}:</span>`);
+                    html.push(`          <span class="detail-value">${escapeHtml(value)}</span>`);
+                    html.push(`        </div>`);
+                } else if (detail.trim()) {
+                    html.push(`        <div class="replacement-detail-text">${escapeHtml(detail)}</div>`);
+                }
+            }
+
+            html.push(`      </div>`);
+        }
+
+        // 關閉替換後總屬性區塊
+        if (inReplacementTotal) {
+            html.push(`      </div>`);
+        }
+
+        html.push(`    </div>`);
+    } else {
+        // 原有邏輯處理其他類型的區塊
+        for (const line of content) {
+            // 檢測裝備項目（以數字開頭，如 "1. 裝備名稱"）
+            if (line.match(/^\s*\d+\.\s+/)) {
+                if (inEquipment && equipmentLines.length > 0) {
+                    html.push(renderEquipmentItem(equipmentIndex, equipmentLines));
+                    equipmentLines = [];
+                }
+                inEquipment = true;
+                equipmentIndex++;
+                equipmentLines.push(line);
+            } else if (inEquipment) {
+                equipmentLines.push(line);
+            } else if (isEquipmentDetail && !line.includes(':')) {
+                const trimmedLine = line.trim();
+                // 檢測特殊標記（如【異域裝備】）
+                if (trimmedLine.match(/^【.*】$/)) {
+                    const tagText = trimmedLine.replace(/【|】/g, '');
+                    html.push(`    <div class="equipment-tag">${escapeHtml(tagText)}</div>`);
+                } else if (!equipmentName && trimmedLine) {
+                    // 第一行非冒號、非標題的行是裝備名稱
+                    equipmentName = trimmedLine;
+                    html.push(`    <div class="equipment-name">${escapeHtml(equipmentName)}</div>`);
+                } else if (trimmedLine) {
+                    // 其他非鍵值對的文本
+                    html.push(`    <div class="info-text">${escapeHtml(trimmedLine)}</div>`);
+                }
+            } else {
+                // 普通內容行
+                if (line.includes(':')) {
+                    const [key, ...valueParts] = line.split(':');
+                    const value = valueParts.join(':').trim();
+                    html.push(`    <div class="info-row">`);
+                    html.push(`      <span class="info-key">${escapeHtml(key.trim())}:</span>`);
+                    html.push(`      <span class="info-value">${escapeHtml(value)}</span>`);
+                    html.push(`    </div>`);
+                } else if (line.trim()) {
+                    html.push(`    <div class="info-text">${escapeHtml(line.trim())}</div>`);
+                }
+            }
+        }
+
+        // 處理最後一個裝備項目
+        if (inEquipment && equipmentLines.length > 0) {
+            html.push(renderEquipmentItem(equipmentIndex, equipmentLines));
+        }
     }
-    
-    // 處理最後一個裝備項目
-    if (inEquipment && equipmentLines.length > 0) {
-        html.push(renderEquipmentItem(equipmentIndex, equipmentLines));
-    }
-    
+
     html.push(`  </div>`);
     html.push(`</div>`);
     return html.join('\n');

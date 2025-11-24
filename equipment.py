@@ -38,13 +38,13 @@ class Equipment:
     name: str
     type: str  # 裝備類型：頭盔、臂鎧、胸鎧、護腿、職業物品
     rarity: str  # 稀有度：普通、稀有、史詩、傳說等
+    locked_attr: str  # 鎖定的屬性（+5）
     tag: Optional[str] = None  # 裝備標籤：堡壘、赤拳互鬥、榴彈兵、至高典範、戰術家、槍手
     attributes: Dict[str, float] = field(default_factory=dict)  # 屬性數值：生命值、近戰、手榴彈、超能力、職業、武器
     stat_tags: Dict[str, str] = field(default_factory=dict)  # 屬性標籤：{屬性名: 詞條類型}
     class_restriction: Optional[List[GuardianClass]] = None  # 職業限制，None 表示所有職業可用
     set_name: Optional[str] = None  # 所屬套裝名稱
     level: int = 0  # 強化等級（0-5級，預設0級）
-    locked_attr: Optional[str] = None  # 鎖定的屬性（+5）
     penalty_attr: Optional[str] = None  # 懲罰屬性（-5）
     
     def __post_init__(self):
@@ -58,6 +58,9 @@ class Equipment:
         # 注意：不在這裡應用鎖定效果，鎖定和懲罰效果只在計算時應用
         self._validate_attributes()
         self._validate_stat_tags()
+        # 驗證鎖定屬性
+        if self.locked_attr not in EQUIPMENT_ATTRIBUTES:
+            raise ValueError(f"鎖定屬性 {self.locked_attr} 不存在，可用屬性: {EQUIPMENT_ATTRIBUTES}")
     
     def _validate_attributes(self):
         """驗證屬性是否符合規則：只有3個屬性有數值（30、25、20），其他3個為0或升級值
@@ -188,19 +191,6 @@ class Equipment:
             if attr not in self.stat_tags:
                 self.stat_tags[attr] = STAT_TYPE_SUPPLEMENT
     
-    def _apply_lock_effect(self):
-        """應用鎖定效果（只在有懲罰屬性時應用）"""
-        if not (self.locked_attr and self.penalty_attr):
-            return
-        
-        if self.locked_attr not in EQUIPMENT_ATTRIBUTES:
-            raise ValueError(f"鎖定屬性 {self.locked_attr} 不存在")
-        if self.penalty_attr not in EQUIPMENT_ATTRIBUTES:
-            raise ValueError(f"懲罰屬性 {self.penalty_attr} 不存在")
-        
-        self.attributes[self.locked_attr] += 5
-        self.attributes[self.penalty_attr] = max(0, self.attributes[self.penalty_attr] - 5)
-    
     def get_stat_tag(self, attr_name: str) -> str:
         """獲取屬性的詞條類型"""
         return self.stat_tags.get(attr_name, STAT_TYPE_SUPPLEMENT)
@@ -243,11 +233,11 @@ class Equipment:
                 max_attrs[attr_name] = float(MAX_UPGRADE_LEVEL)
         
         # 應用鎖定和懲罰效果
-        if self.locked_attr and self.penalty_attr:
-            # 鎖定屬性：基礎值 +5
-            locked_base = get_base_value(self.locked_attr)
-            max_attrs[self.locked_attr] = locked_base + 5
-            
+        # 鎖定屬性：基礎值 +5
+        locked_base = get_base_value(self.locked_attr)
+        max_attrs[self.locked_attr] = locked_base + 5
+        
+        if self.penalty_attr:
             # 懲罰屬性：基礎值 -5（但不低於0）
             penalty_base = get_base_value(self.penalty_attr)
             max_attrs[self.penalty_attr] = max(0, penalty_base - 5)

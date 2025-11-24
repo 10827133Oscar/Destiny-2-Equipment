@@ -100,6 +100,21 @@
 
                 <div class="form-group">
                     <label>
+                        <input type="checkbox" id="use-fragment-check">
+                        碎片修正
+                    </label>
+                </div>
+
+                <div id="fragment-config" class="fragment-config" style="display: none;">
+                    <h3>碎片修正數值</h3>
+                    <small class="info-text">輸入各屬性的修正值（可正可負）</small>
+                    <div class="attributes-grid" id="fragment-attributes">
+                        <!-- 動態生成 -->
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>
                         <input type="checkbox" id="use-exotic-check">
                         使用異域裝備
                     </label>

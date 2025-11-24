@@ -2,13 +2,14 @@
 裝備組合數值計算器
 """
 from typing import List, Dict, Optional
-from itertools import combinations, product
+from itertools import product
 from equipment import (
     Equipment, EQUIPMENT_ATTRIBUTES, EQUIPMENT_TAGS, MAX_UPGRADE_LEVEL,
     STAT_TYPE_MAIN, STAT_TYPE_SUB, STAT_TYPE_RANDOM, STAT_TYPE_SUPPLEMENT
 )
 from inventory import ClassInventoryManager
 from classes import GuardianClass
+from config import Config
 
 
 class EquipmentCalculator:
@@ -22,6 +23,71 @@ class EquipmentCalculator:
         """
         self.inventory_manager = inventory_manager
         self.set_bonuses: Dict[str, Dict[int, Dict[str, float]]] = {}  # 套裝效果定義 {套裝名: {件數: {屬性: 數值}}}
+        self._config_cache: Dict[str, List[Dict]] = {}  # 配置緩存
+
+    def _calculate_base_after_replacement(self, base_total: Dict, old_attrs: Dict, new_attrs: Dict) -> Dict:
+        """計算替換裝備後的基礎屬性
+
+        Args:
+            base_total: 當前總基礎屬性
+            old_attrs: 被替換裝備的屬性
+            new_attrs: 新裝備的屬性
+
+        Returns:
+            替換後的基礎屬性
+        """
+        new_base = {}
+        for attr in EQUIPMENT_ATTRIBUTES:
+            old_val = old_attrs.get(attr, 0)
+            new_val = new_attrs.get(attr, 0)
+            new_base[attr] = base_total.get(attr, 0) - old_val + new_val
+        return new_base
+
+    def _apply_bonuses_and_corrections(self, base_attrs: Dict, bonus_allocation: Dict) -> Dict:
+        """應用加成和碎片修正到基礎屬性
+
+        Args:
+            base_attrs: 基礎屬性
+            bonus_allocation: 加成分配
+
+        Returns:
+            最終屬性
+        """
+        final_total = base_attrs.copy()
+
+        # 應用加成
+        for attr, bonus_count in bonus_allocation.items():
+            final_total[attr] = final_total.get(attr, 0) + bonus_count * 10
+
+        # 應用碎片修正
+        if hasattr(self, '_fragment_corrections') and self._fragment_corrections:
+            for attr, correction in self._fragment_corrections.items():
+                final_total[attr] = final_total.get(attr, 0) + correction
+
+        return final_total
+
+    def _check_targets_met(self, final_total: Dict, target_attributes: Dict) -> tuple:
+        """檢查是否達成所有目標
+
+        Args:
+            final_total: 最終屬性
+            target_attributes: 目標屬性
+
+        Returns:
+            (all_met: bool, remaining: float) - 是否全部達成，剩餘點數
+        """
+        all_met = True
+        remaining = 0
+
+        for attr, target_val in target_attributes.items():
+            actual_val = final_total.get(attr, 0)
+            if actual_val < target_val:
+                all_met = False
+                remaining -= (target_val - actual_val)
+            else:
+                remaining += actual_val - target_val
+
+        return all_met, remaining
     
     def add_set_bonus(self, set_name: str, piece_count: int, bonus: Dict[str, float]):
         """添加套裝效果
@@ -256,308 +322,208 @@ class EquipmentCalculator:
         lines.append("=" * 60)
         return "\n".join(lines)
     
-    def find_combination_by_target(self, target_attributes: Dict[str, float], 
+    def find_combination_by_target(self, target_attributes: Dict[str, float],
                                    guardian_class: GuardianClass,
                                    max_equipments: int = 5,
                                    exotic_equipment: Optional[Dict] = None,
-                                   preferred_attr: Optional[str] = None) -> Dict:
+                                   preferred_attr: Optional[str] = None,
+                                   fragment_corrections: Optional[Dict[str, float]] = None) -> Dict:
         """根據目標屬性值尋找裝備組合"""
         inventory = self.inventory_manager.get_inventory(guardian_class)
         all_equipments = inventory.get_all_equipments()
-        
+
+        # 保存碎片修正以便後續使用
+        self._fragment_corrections = fragment_corrections or {}
+
         if len(all_equipments) == 0 and not exotic_equipment:
             return {
                 "found": False,
                 "message": "倉庫中沒有裝備",
                 "required_equipments": []
             }
-        
-        # 過濾出有目標屬性的裝備（使用滿級屬性）
-        relevant_equipments = []
+
+        # 按部位分組裝備
+        equipments_by_type: Dict[str, List[Equipment]] = {eq_type: [] for eq_type in Config.EQUIPMENT_TYPES}
         for eq in all_equipments:
-            max_level_attrs = eq.get_max_level_attributes()
-            for target_attr in target_attributes.keys():
-                if max_level_attrs.get(target_attr, 0) > 0:
-                    relevant_equipments.append(eq)
-                    break
-        
-        if len(relevant_equipments) == 0:
+            if eq.type in equipments_by_type:
+                equipments_by_type[eq.type].append(eq)
+
+        # 確定需要填充的部位
+        if exotic_equipment:
+            exotic_type = exotic_equipment.get("type")
+            required_types = [t for t in Config.EQUIPMENT_TYPES if t != exotic_type]
+        else:
+            required_types = Config.EQUIPMENT_TYPES.copy()
+
+        # 檢查是否每個需要的部位都有裝備
+        missing_types = [t for t in required_types if len(equipments_by_type[t]) == 0]
+        if missing_types:
             return {
                 "found": False,
-                "message": "倉庫中沒有包含目標屬性的裝備",
-                "required_equipments": []
+                "message": f"缺少以下部位的裝備: {', '.join(missing_types)}",
+                "required_equipments": [],
+                "missing_types": missing_types
             }
-        
-        # 限制搜索數量以避免卡頓：限制相關裝備數量
-        MAX_RELEVANT_EQUIPMENTS = 30  # 最多搜索30個相關裝備
-        if len(relevant_equipments) > MAX_RELEVANT_EQUIPMENTS:
-            # 按對目標屬性的總貢獻排序，優先選擇貢獻大的裝備
-            def calculate_contribution(eq):
+
+        # 對每個部位的裝備按效益排序，並限制數量
+        MAX_PER_TYPE = 10  # 每個部位最多考慮10件裝備（增加搜索廣度）
+        target_attr_set = set(target_attributes.keys())
+
+        for eq_type in required_types:
+            # 計算裝備的效益分數：目標貢獻 - 浪費懲罰
+            def calculate_efficiency(eq, targets=target_attr_set):
                 max_level_attrs = eq.get_max_level_attributes()
-                contribution = sum(max_level_attrs.get(attr, 0) for attr in target_attributes.keys())
-                return contribution
-            
-            relevant_equipments.sort(key=calculate_contribution, reverse=True)
-            relevant_equipments = relevant_equipments[:MAX_RELEVANT_EQUIPMENTS]
-        
-        # 嘗試不同數量的裝備組合（從1個到max_equipments個）
+                # 對目標屬性的貢獻
+                contribution = sum(max_level_attrs.get(attr, 0) for attr in targets)
+                # 在非目標屬性上的浪費（只計算主副詞條的浪費，補充詞條不算）
+                waste = 0
+                if eq.tag and eq.tag in EQUIPMENT_TAGS:
+                    main_attr, sub_attr = EQUIPMENT_TAGS[eq.tag]
+                    if main_attr not in targets:
+                        waste += max_level_attrs.get(main_attr, 0)
+                    if sub_attr not in targets:
+                        waste += max_level_attrs.get(sub_attr, 0)
+                # 效益 = 貢獻 - 浪費
+                return contribution - waste
+
+            # 總是排序，確保最佳裝備在前
+            equipments_by_type[eq_type].sort(key=calculate_efficiency, reverse=True)
+            # 限制數量
+            if len(equipments_by_type[eq_type]) > MAX_PER_TYPE:
+                equipments_by_type[eq_type] = equipments_by_type[eq_type][:MAX_PER_TYPE]
+
+        # 初始化最佳結果
         best_combination = None
         best_score = float('inf')
         best_result = None
-        best_penalty_configs = {}  # 記錄最佳組合的懲罰屬性配置
-        best_preferred_value = -1  # 記錄最佳組合的偏好屬性值（用於在滿足目標後優化）
-        best_bonus_allocation = {}  # 記錄最佳加成分配
-        
-        # 如果有異域裝備，一般裝備的數量應該是4個（總共5個裝備）
-        # 如果沒有異域裝備，一般裝備的數量應該是5個
-        if exotic_equipment:
-            required_regular_equipments = 4  # 4個一般裝備 + 1個異域裝備 = 5個
-            # 優先從4個裝備開始搜索，確保找到5個裝備的組合
-            # 如果找不到好的4個裝備組合，再嘗試更少的裝備
-            search_range = list(range(required_regular_equipments, 0, -1))  # 從4倒序到1
-        else:
-            required_regular_equipments = max_equipments  # 5個一般裝備
-            # 優先從5個裝備開始搜索
-            search_range = list(range(required_regular_equipments, 0, -1))  # 從5倒序到1
-        
-        # 限制搜索範圍，確保不超過裝備總數
-        search_range = [n for n in search_range if n <= len(relevant_equipments)]
-        
+        best_penalty_configs = {}
+        best_preferred_value = -1
+        best_bonus_allocation = {}
+
+        # 使用笛卡爾積生成所有可能的組合（每個部位選一件）
+        type_equipment_lists = [equipments_by_type[t] for t in required_types]
+
         # 添加搜索計數限制
-        MAX_COMBINATIONS_TO_CHECK = 5000  # 最多檢查5000個組合
+        MAX_COMBINATIONS_TO_CHECK = 20000  # 增加搜索上限以找到更多可能的組合
         combinations_checked = 0
-        
-        for num_equipments in search_range:
-            # 如果已經檢查了太多組合，停止搜索
+
+        for combo in product(*type_equipment_lists):
+            # 檢查組合數量限制
             if combinations_checked >= MAX_COMBINATIONS_TO_CHECK:
                 break
-            
-            for combo in combinations(relevant_equipments, num_equipments):
-                # 檢查組合數量限制
-                if combinations_checked >= MAX_COMBINATIONS_TO_CHECK:
-                    break
-                
-                # 找出有鎖定但沒有懲罰屬性的裝備
-                locked_equipments = [eq for eq in combo if eq.locked_attr and not eq.penalty_attr]
-                
-                # 如果有需要選擇懲罰屬性的裝備，嘗試不同的懲罰屬性組合
-                if locked_equipments:
-                    penalty_combinations = self._generate_penalty_combinations(locked_equipments)
-                    
-                    # 限制懲罰屬性組合數量，避免過多計算
-                    MAX_PENALTY_COMBINATIONS = 20  # 最多嘗試20種懲罰屬性組合
-                    if len(penalty_combinations) > MAX_PENALTY_COMBINATIONS:
-                        penalty_combinations = penalty_combinations[:MAX_PENALTY_COMBINATIONS]
-                    
-                    # 嘗試每種懲罰屬性組合
-                    for penalty_config in penalty_combinations:
-                        # 檢查組合數量限制
-                        if combinations_checked >= MAX_COMBINATIONS_TO_CHECK:
-                            break
-                        
-                        combinations_checked += 1
-                        # 臨時設置懲罰屬性
-                        original_penalties = {}
-                        for eq in locked_equipments:
-                            if eq.id in penalty_config:
-                                original_penalties[eq.id] = eq.penalty_attr
-                                eq.penalty_attr = penalty_config[eq.id]
-                                # 重新應用鎖定效果
-                                self._reapply_lock_effect(eq)
-                        
-                        try:
-                            eq_ids = [eq.id for eq in combo]
-                            result = self.calculate_combination(eq_ids, guardian_class, exotic_equipment)
-                            
-                            # 計算最佳加成分配
-                            bonus_allocation = self._calculate_optimal_bonuses(
-                                result["total_attributes"], target_attributes, preferred_attr
-                            )
-                            
-                            # 應用加成到總屬性
-                            final_attributes = result["total_attributes"].copy()
-                            for attr, bonus_count in bonus_allocation.items():
-                                final_attributes[attr] = final_attributes.get(attr, 0) + bonus_count * 10
-                            
-                            # 計算與目標的差距（只計算目標屬性，使用應用加成後的屬性）
-                            score = 0
-                            all_met = True
-                            for target_attr, target_value in target_attributes.items():
-                                actual_value = final_attributes.get(target_attr, 0)
-                                if actual_value < target_value:
-                                    all_met = False
-                                    score += (target_value - actual_value) ** 2  # 使用平方差
-                                else:
-                                    # 如果超過目標，也計算超出的部分（但權重較小）
-                                    score += (actual_value - target_value) * 0.1
-                            
-                            # 獲取偏好屬性值（如果指定了偏好）
-                            preferred_value = final_attributes.get(preferred_attr, 0) if preferred_attr else 0
-                            
-                            # 獲取當前組合的裝備數量（包括異域裝備）
-                            current_equipment_count = len(eq_ids) + (1 if exotic_equipment else 0)
-                            best_equipment_count = len(best_combination) + (1 if best_combination and exotic_equipment else 0) if best_combination else 0
-                            
-                            # 選擇最佳組合：優先滿足目標，然後優化偏好屬性，最後考慮裝備數量
-                            is_better = False
-                            if all_met:
-                                # 如果都滿足目標
-                                if best_score == float('inf'):
-                                    # 之前沒有滿足目標的組合
-                                    is_better = True
-                                elif best_score > 0:
-                                    # 之前沒有滿足目標，現在滿足了
-                                    is_better = True
-                                elif best_score == 0:
-                                    # 都滿足了目標，優先選擇裝備數量更接近所需數量的組合
-                                    if current_equipment_count > best_equipment_count:
-                                        is_better = True
-                                    elif current_equipment_count == best_equipment_count:
-                                        # 裝備數量相同，比較偏好屬性值
-                                        if preferred_attr:
-                                            if preferred_value > best_preferred_value:
-                                                is_better = True
-                                        else:
-                                            # 沒有偏好屬性，選擇分數更小的（更接近目標）
-                                            if score < best_score:
-                                                is_better = True
-                            else:
-                                # 如果沒滿足目標，優先比較分數，如果分數相近，選擇裝備數量更多的
-                                if score < best_score:
-                                    is_better = True
-                                elif best_score != float('inf') and abs(score - best_score) < 10:
-                                    # 分數相近（差距小於10），優先選擇裝備數量更多的
-                                    if current_equipment_count > best_equipment_count:
-                                        is_better = True
-                            
-                            if is_better:
-                                best_score = score if not all_met else 0
-                                best_combination = eq_ids
-                                best_result = result
-                                best_penalty_configs = penalty_config.copy()
-                                best_bonus_allocation = bonus_allocation.copy()
-                                best_preferred_value = preferred_value
-                                
-                                # 如果完全匹配，立即返回
-                                if all_met and score == 0:
-                                    # 還原懲罰屬性
-                                    for eq in locked_equipments:
-                                        if eq.id in original_penalties:
-                                            eq.penalty_attr = original_penalties[eq.id]
-                                            self._reapply_lock_effect(eq)
-                                    
-                                    # 更新結果中的總屬性（包含加成）
-                                    best_result["total_attributes"] = final_attributes
-                                    best_result["bonus_allocation"] = bonus_allocation
-                                    
-                                    return {
-                                        "found": True,
-                                        "combination": best_combination,
-                                        "result": best_result,
-                                        "penalty_configs": best_penalty_configs,
-                                        "bonus_allocation": bonus_allocation,
-                                        "target_attributes": target_attributes,
-                                        "message": "找到完全匹配的裝備組合"
-                                    }
-                        finally:
-                            # 還原懲罰屬性
-                            for eq in locked_equipments:
-                                if eq.id in original_penalties:
-                                    eq.penalty_attr = original_penalties[eq.id]
-                                    self._reapply_lock_effect(eq)
-                else:
-                    # 沒有需要選擇懲罰屬性的裝備，直接計算
+
+            # 找出有鎖定但沒有懲罰屬性的裝備
+            locked_equipments = [eq for eq in combo if eq.locked_attr and not eq.penalty_attr]
+
+            # 如果有需要選擇懲罰屬性的裝備，嘗試不同的懲罰屬性組合
+            if locked_equipments:
+                penalty_combinations = self._generate_penalty_combinations(locked_equipments, target_attributes)
+
+                # 限制懲罰屬性組合數量，避免過多計算
+                MAX_PENALTY_COMBINATIONS = 50  # 增加懲罰屬性組合上限
+                if len(penalty_combinations) > MAX_PENALTY_COMBINATIONS:
+                    penalty_combinations = penalty_combinations[:MAX_PENALTY_COMBINATIONS]
+
+                # 嘗試每種懲罰屬性組合
+                for penalty_config in penalty_combinations:
+                    # 檢查組合數量限制
+                    if combinations_checked >= MAX_COMBINATIONS_TO_CHECK:
+                        break
+
                     combinations_checked += 1
-                    eq_ids = [eq.id for eq in combo]
-                    result = self.calculate_combination(eq_ids, guardian_class, exotic_equipment)
-                    
-                    # 計算最佳加成分配
-                    bonus_allocation = self._calculate_optimal_bonuses(
-                        result["total_attributes"], target_attributes, preferred_attr
-                    )
-                    
-                    # 應用加成到總屬性
-                    final_attributes = result["total_attributes"].copy()
-                    for attr, bonus_count in bonus_allocation.items():
-                        final_attributes[attr] = final_attributes.get(attr, 0) + bonus_count * 10
-                    
-                    # 計算與目標的差距（使用應用加成後的屬性）
-                    score = 0
-                    all_met = True
-                    for target_attr, target_value in target_attributes.items():
-                        actual_value = final_attributes.get(target_attr, 0)
-                        if actual_value < target_value:
-                            all_met = False
-                            score += (target_value - actual_value) ** 2
-                        else:
-                            score += (actual_value - target_value) * 0.1
-                    
-                    # 獲取偏好屬性值（如果指定了偏好）
-                    preferred_value = final_attributes.get(preferred_attr, 0) if preferred_attr else 0
-                    
-                    # 獲取當前組合的裝備數量（包括異域裝備）
-                    current_equipment_count = len(eq_ids) + (1 if exotic_equipment else 0)
-                    best_equipment_count = len(best_combination) + (1 if best_combination and exotic_equipment else 0) if best_combination else 0
-                    
-                    # 選擇最佳組合：優先滿足目標，然後優化偏好屬性，最後考慮裝備數量
-                    is_better = False
-                    if all_met:
-                        # 如果都滿足目標
-                        if best_score == float('inf'):
-                            # 之前沒有滿足目標的組合
-                            is_better = True
-                        elif best_score > 0:
-                            # 之前沒有滿足目標，現在滿足了
-                            is_better = True
-                        elif best_score == 0:
-                            # 都滿足了目標，優先選擇裝備數量更接近所需數量的組合
-                            if current_equipment_count > best_equipment_count:
-                                is_better = True
-                            elif current_equipment_count == best_equipment_count:
-                                # 裝備數量相同，比較偏好屬性值
-                                if preferred_attr:
-                                    if preferred_value > best_preferred_value:
-                                        is_better = True
-                                else:
-                                    # 沒有偏好屬性，選擇分數更小的（更接近目標）
-                                    if score < best_score:
-                                        is_better = True
-                    else:
-                        # 如果沒滿足目標，優先比較分數，如果分數相近，選擇裝備數量更多的
-                        if score < best_score:
-                            is_better = True
-                        elif best_score != float('inf') and abs(score - best_score) < 10:
-                            # 分數相近（差距小於10），優先選擇裝備數量更多的
-                            if current_equipment_count > best_equipment_count:
-                                is_better = True
-                    
-                    if is_better:
-                        best_score = score if not all_met else 0
-                        best_combination = eq_ids
-                        best_result = result
-                        best_penalty_configs = {}  # 沒有懲罰配置
-                        best_bonus_allocation = bonus_allocation.copy()
-                        best_preferred_value = preferred_value
+                    # 臨時設置懲罰屬性
+                    original_penalties = {}
+                    for eq in locked_equipments:
+                        if eq.id in penalty_config:
+                            original_penalties[eq.id] = eq.penalty_attr
+                            eq.penalty_attr = penalty_config[eq.id]
+
+                    try:
+                        eq_ids = [eq.id for eq in combo]
+                        result = self.calculate_combination(eq_ids, guardian_class, exotic_equipment)
+
+                        # 計算當前最佳裝備數量
+                        current_best_count = best_result["equipment_count"] if best_result else 0
+
+                        # 使用統一的評估方法
+                        eval_result = self._evaluate_combination(
+                            result, target_attributes, preferred_attr, best_score,
+                            current_best_count, best_preferred_value, exotic_equipment
+                        )
+
+                        if eval_result["is_better"]:
+                            best_score = eval_result["score"]
+                            best_combination = eq_ids
+                            best_result = result
+                            best_penalty_configs = penalty_config.copy()
+                            best_bonus_allocation = eval_result["bonus_allocation"].copy()
+                            best_preferred_value = eval_result["preferred_value"]
+
+                            # 如果完全匹配，立即返回
+                            if eval_result["all_met"] and eval_result["score"] == 0:
+                                # 還原懲罰屬性
+                                for eq in locked_equipments:
+                                    if eq.id in original_penalties:
+                                        eq.penalty_attr = original_penalties[eq.id]
+
+                                # 更新結果中的總屬性（包含加成）
+                                best_result["total_attributes"] = eval_result["final_attributes"]
+                                best_result["bonus_allocation"] = eval_result["bonus_allocation"]
+
+                                return {
+                                    "found": True,
+                                    "combination": best_combination,
+                                    "result": best_result,
+                                    "penalty_configs": best_penalty_configs,
+                                    "bonus_allocation": eval_result["bonus_allocation"],
+                                    "target_attributes": target_attributes,
+                                    "fragment_corrections": self._fragment_corrections,
+                                    "message": "找到完全匹配的裝備組合"
+                                }
+                    finally:
+                        # 還原懲罰屬性
+                        for eq in locked_equipments:
+                            if eq.id in original_penalties:
+                                eq.penalty_attr = original_penalties[eq.id]
+            else:
+                # 沒有需要選擇懲罰屬性的裝備，直接計算
+                combinations_checked += 1
+                eq_ids = [eq.id for eq in combo]
+                result = self.calculate_combination(eq_ids, guardian_class, exotic_equipment)
+
+                # 計算當前最佳裝備數量
+                current_best_count = best_result["equipment_count"] if best_result else 0
+
+                # 使用統一的評估方法
+                eval_result = self._evaluate_combination(
+                    result, target_attributes, preferred_attr, best_score,
+                    current_best_count, best_preferred_value, exotic_equipment
+                )
+
+                if eval_result["is_better"]:
+                    best_score = eval_result["score"]
+                    best_combination = eq_ids
+                    best_result = result
+                    best_penalty_configs = {}  # 沒有懲罰配置
+                    best_bonus_allocation = eval_result["bonus_allocation"].copy()
+                    best_preferred_value = eval_result["preferred_value"]
+
+                    # 早期終止：如果找到完全匹配的結果，立即返回
+                    if eval_result["all_met"] and eval_result["score"] == 0:
+                        # 更新結果中的總屬性（包含加成）
+                        best_result["total_attributes"] = eval_result["final_attributes"]
+                        best_result["bonus_allocation"] = eval_result["bonus_allocation"]
+
+                        return {
+                            "found": True,
+                            "combination": best_combination,
+                            "result": best_result,
+                            "bonus_allocation": eval_result["bonus_allocation"],
+                            "target_attributes": target_attributes,
+                            "fragment_corrections": self._fragment_corrections,
+                            "message": "找到完全匹配的裝備組合"
+                        }
                         
-                        # 早期終止：如果找到完全匹配的結果，立即返回
-                        if all_met and score == 0:
-                            # 更新結果中的總屬性（包含加成）
-                            best_result["total_attributes"] = final_attributes
-                            best_result["bonus_allocation"] = bonus_allocation
-                            
-                            return {
-                                "found": True,
-                                "combination": best_combination,
-                                "result": best_result,
-                                "bonus_allocation": bonus_allocation,
-                                "target_attributes": target_attributes,
-                                "message": "找到完全匹配的裝備組合"
-                            }
-                        
-                        # 早期終止：如果找到所有目標都滿足且分數很小的結果，也可以提前停止（可選）
-                        # 這個可以進一步優化，但可能影響結果質量，暫時註釋掉
-                        # if all_met and score < 1.0:
-                        #     break
         
         # 如果找到接近的組合
         if best_combination:
@@ -565,10 +531,16 @@ class EquipmentCalculator:
             final_attributes = best_result["total_attributes"].copy()
             for attr, bonus_count in best_bonus_allocation.items():
                 final_attributes[attr] = final_attributes.get(attr, 0) + bonus_count * 10
+
+            # 應用碎片修正
+            if self._fragment_corrections:
+                for attr, correction in self._fragment_corrections.items():
+                    final_attributes[attr] = final_attributes.get(attr, 0) + correction
+
             best_result["total_attributes"] = final_attributes
             best_result["bonus_allocation"] = best_bonus_allocation
-            
-            # 檢查是否所有目標都達到（使用應用加成後的屬性）
+
+            # 檢查是否所有目標都達到（使用應用加成和碎片修正後的屬性）
             all_targets_met = True
             missing_attrs = {}
             for target_attr, target_value in target_attributes.items():
@@ -588,19 +560,14 @@ class EquipmentCalculator:
                     "penalty_configs": best_penalty_configs,
                     "bonus_allocation": best_bonus_allocation,
                     "target_attributes": target_attributes,
+                    "fragment_corrections": self._fragment_corrections,
                     "message": message
                 }
             else:
-                # 如果配不出來，分析需要的裝備（考慮加成後的屬性）
-                # 在分析時，需要從缺少的屬性中減去加成提供的屬性
-                adjusted_missing = missing_attrs.copy()
-                for attr, bonus_count in best_bonus_allocation.items():
-                    if attr in adjusted_missing:
-                        adjusted_missing[attr] = max(0, adjusted_missing[attr] - bonus_count * 10)
-                
+                # 如果配不出來，分析需要的裝備
                 exotic_type = exotic_equipment.get("type") if exotic_equipment else None
                 required_equipments = self._analyze_required_equipments(
-                    target_attributes, best_result, guardian_class, adjusted_missing, exotic_type
+                    target_attributes, best_result, guardian_class, missing_attrs, exotic_type, preferred_attr
                 )
                 message = f"無法完全達到目標，缺少屬性：{missing_attrs}"
                 if combinations_checked >= MAX_COMBINATIONS_TO_CHECK:
@@ -612,6 +579,7 @@ class EquipmentCalculator:
                     "penalty_configs": best_penalty_configs,
                     "bonus_allocation": best_bonus_allocation,
                     "target_attributes": target_attributes,
+                    "fragment_corrections": self._fragment_corrections,
                     "missing_attributes": missing_attrs,
                     "required_equipments": required_equipments,
                     "message": message
@@ -620,11 +588,12 @@ class EquipmentCalculator:
         # 如果完全找不到
         exotic_type = exotic_equipment.get("type") if exotic_equipment else None
         required_equipments = self._analyze_required_equipments(
-            target_attributes, None, guardian_class, target_attributes, exotic_type
+            target_attributes, None, guardian_class, target_attributes, exotic_type, preferred_attr
         )
         return {
             "found": False,
             "target_attributes": target_attributes,
+            "fragment_corrections": self._fragment_corrections,
             "required_equipments": required_equipments,
             "message": "無法找到接近目標的裝備組合"
         }
@@ -633,185 +602,433 @@ class EquipmentCalculator:
                                      current_result: Optional[Dict],
                                      guardian_class: GuardianClass,
                                      missing_attrs: Dict[str, float],
-                                     exotic_type: Optional[str] = None) -> List[Dict]:
-        """分析達到目標所需的裝備（推薦倉庫中沒有的裝備）"""
-        
-        inventory = self.inventory_manager.get_inventory(guardian_class)
-        all_equipments = inventory.get_all_equipments()
-        existing_types = set()  # 用於追蹤已推薦的裝備類型，避免重複
-        
-        # 計算當前已有的屬性值
-        current_attrs = {}
-        if current_result:
-            current_attrs = current_result["total_attributes"]
-        else:
-            for attr in EQUIPMENT_ATTRIBUTES:
-                current_attrs[attr] = 0
-        
-        # 計算還需要的屬性值
-        needed_attrs = {}
-        for attr, target_value in target_attributes.items():
-            current_value = current_attrs.get(attr, 0)
-            needed = target_value - current_value
-            if needed > 0:
-                needed_attrs[attr] = needed
-        
-        if not needed_attrs:
+                                     exotic_type: Optional[str] = None,
+                                     preferred_attr: Optional[str] = None) -> List[Dict]:
+        """分析達到目標所需的裝備替換建議
+
+        邏輯：
+        1. 先嘗試替換 1 件裝備能否達成目標
+        2. 如果不行，嘗試替換 2 件
+        3. 找到能達成目標的最少替換方案
+        4. 不能替換異域裝備
+        """
+        if not current_result or not missing_attrs:
             return []
-        
-        # 生成推薦裝備配置（倉庫中沒有的）
-        equipment_types = ["頭盔", "臂鎧", "胸鎧", "護腿", "職業物品"]
-        # 排除異域裝備的部位
-        if exotic_type and exotic_type in equipment_types:
-            equipment_types = [t for t in equipment_types if t != exotic_type]
-        recommended = []
-        
-        # 為每個需要的屬性生成推薦裝備
-        for attr, needed_value in needed_attrs.items():
-            if len(recommended) >= 3:
-                break
-            
-            # 找出能提供該屬性的最佳標籤配置
-            best_config = None
-            best_score = 0
-            
-            for tag, (main_attr, sub_attr) in EQUIPMENT_TAGS.items():
-                # 檢查這個標籤是否能提供需要的屬性
-                contribution = 0
-                if main_attr == attr:
-                    contribution += 30  # 主詞條
-                elif sub_attr == attr:
-                    contribution += 25  # 副詞條
-                
-                # 如果主詞條或副詞條是目標屬性，可以考慮鎖定
-                if main_attr == attr:
-                    contribution += 5  # 鎖定可以額外+5
-                
-                if contribution > best_score:
-                    # 選擇一個未推薦過的裝備類型
-                    for eq_type in equipment_types:
-                        if eq_type not in existing_types:
-                            # 選擇隨機詞條（不能與主詞條、副詞條重複）
-                            available_random = [a for a in EQUIPMENT_ATTRIBUTES 
-                                              if a not in [main_attr, sub_attr]]
-                            if available_random:
-                                random_stat = available_random[0]
-                                
-                                # 計算滿級屬性
-                                max_attrs = {}
-                                max_attrs[main_attr] = 35 if main_attr == attr else 30  # 如果鎖定目標屬性則+5
-                                max_attrs[sub_attr] = 25
-                                max_attrs[random_stat] = 20
-                                
-                                # 補充詞條（滿級時為5）
-                                for supplement_attr in EQUIPMENT_ATTRIBUTES:
-                                    if supplement_attr not in [main_attr, sub_attr, random_stat]:
-                                        max_attrs[supplement_attr] = MAX_UPGRADE_LEVEL
-                                
-                                # 計算對所需屬性的貢獻
-                                total_contribution = max_attrs.get(attr, 0)
-                                
-                                if total_contribution > 0 and total_contribution >= best_score:
-                                    best_score = total_contribution
-                                    best_config = {
-                                        "type": eq_type,
-                                        "tag": tag,
-                                        "random_stat": random_stat,
-                                        "locked_attr": attr if main_attr == attr else None,
-                                        "attributes": max_attrs,
-                                        "contribution": total_contribution
-                                    }
-                            break
-            
-            if best_config:
-                # 計算對所有所需屬性的貢獻
-                contributions = {}
-                for needed_attr, needed_val in needed_attrs.items():
-                    attr_value = best_config["attributes"].get(needed_attr, 0)
-                    contributions[needed_attr] = min(attr_value, needed_val)
-                
-                recommended.append({
-                    "name": f"{best_config['tag']}_{best_config['type']}",
-                    "type": best_config["type"],
-                    "tag": best_config["tag"],
-                    "random_stat": best_config["random_stat"],
-                    "locked_attr": best_config["locked_attr"],
-                    "attributes": {k: v for k, v in best_config["attributes"].items() if v > 0},
-                    "contributions": contributions,
-                    "score": sum(contributions.values())
-                })
-                # 標記這個裝備類型已被使用
-                existing_types.add(best_config["type"])
-        
-        # 如果還需要更多裝備，生成通用的高屬性裝備
-        while len(recommended) < 3 and len(recommended) < len(equipment_types):
-            # 找出還需要的屬性
-            remaining_needs = {}
-            for attr, needed_value in needed_attrs.items():
-                provided = sum(r["contributions"].get(attr, 0) for r in recommended)
-                remaining = needed_value - provided
-                if remaining > 0:
-                    remaining_needs[attr] = remaining
-            
-            if not remaining_needs:
-                break
-            
-            # 找出能提供最多剩餘需求的標籤
-            best_tag = None
-            best_attr = max(remaining_needs.items(), key=lambda x: x[1])[0]
-            
-            for tag, (main_attr, sub_attr) in EQUIPMENT_TAGS.items():
-                if main_attr == best_attr or sub_attr == best_attr:
-                    best_tag = tag
-                    break
-            
-            if not best_tag:
-                # 如果沒有匹配的標籤，選擇第一個
-                best_tag = list(EQUIPMENT_TAGS.keys())[0]
-                main_attr, sub_attr = EQUIPMENT_TAGS[best_tag]
-            
-            # 選擇一個未使用的裝備類型
-            for eq_type in equipment_types:
-                if eq_type not in existing_types:
-                    available_random = [a for a in EQUIPMENT_ATTRIBUTES 
-                                      if a not in [main_attr, sub_attr]]
-                    if available_random:
-                        random_stat = available_random[0]
-                        
-                        # 計算滿級屬性
-                        max_attrs = {}
-                        max_attrs[main_attr] = 30
-                        max_attrs[sub_attr] = 25
-                        max_attrs[random_stat] = 20
-                        
-                        # 補充詞條
-                        for supplement_attr in EQUIPMENT_ATTRIBUTES:
-                            if supplement_attr not in [main_attr, sub_attr, random_stat]:
-                                max_attrs[supplement_attr] = MAX_UPGRADE_LEVEL
-                        
-                        # 計算貢獻
-                        contributions = {}
-                        for needed_attr, needed_val in needed_attrs.items():
-                            attr_value = max_attrs.get(needed_attr, 0)
-                            contributions[needed_attr] = min(attr_value, needed_val)
-                        
-                        recommended.append({
-                            "name": f"{best_tag}_{eq_type}",
-                            "type": eq_type,
-                            "tag": best_tag,
-                            "random_stat": random_stat,
-                            "locked_attr": None,
-                            "attributes": {k: v for k, v in max_attrs.items() if v > 0},
-                            "contributions": contributions,
-                            "score": sum(contributions.values())
+
+        # 獲取當前組合的裝備詳情
+        current_equipments = current_result.get("equipment_details", [])
+        if not current_equipments:
+            return []
+
+        # 計算基礎屬性（不含加成）- 從裝備詳情直接加總
+        base_total = {}
+        for attr in EQUIPMENT_ATTRIBUTES:
+            base_total[attr] = 0
+        for eq in current_equipments:
+            for attr, value in eq.get("attributes", {}).items():
+                base_total[attr] = base_total.get(attr, 0) + value
+
+        # 過濾可替換的裝備（排除異域）
+        replaceable = [eq for eq in current_equipments if not eq.get("is_exotic")]
+
+        # 嘗試替換 1 件
+        one_replace_solutions = []
+        one_replace_improvements = []  # 不能達成但有改善的方案
+        for eq in replaceable:
+            solution = self._try_single_replacement(
+                eq, base_total, target_attributes, missing_attrs, preferred_attr
+            )
+            if solution:
+                if solution.get("can_achieve"):
+                    one_replace_solutions.append(solution)
+                else:
+                    one_replace_improvements.append(solution)
+
+        # 如果有能達成目標的單件替換方案
+        if one_replace_solutions:
+            # 按剩餘點數排序（越多越好，代表浪費越少）
+            one_replace_solutions.sort(key=lambda x: x.get("remaining_points", 0), reverse=True)
+            return [{
+                "num_replacements": 1,
+                "message": "需替換 1 件裝備達成目標",
+                "replacements": [one_replace_solutions[0]]
+            }]
+
+        # 嘗試替換 2 件
+        from itertools import combinations as iter_combinations
+        two_replace_solutions = []
+
+        for eq_pair in iter_combinations(replaceable, 2):
+            solution = self._try_multi_replacement(
+                eq_pair, base_total, target_attributes, missing_attrs, preferred_attr
+            )
+            if solution:
+                two_replace_solutions.append(solution)
+
+        if two_replace_solutions:
+            # 按剩餘點數排序
+            two_replace_solutions.sort(key=lambda x: x.get("remaining_points", 0), reverse=True)
+            return [{
+                "num_replacements": 2,
+                "message": "需替換 2 件裝備達成目標",
+                "replacements": two_replace_solutions[0]["replacements"],
+                "new_total": two_replace_solutions[0].get("new_total", {})
+            }]
+
+        # 嘗試替換 3 件
+        three_replace_solutions = []
+        for eq_triple in iter_combinations(replaceable, 3):
+            solution = self._try_multi_replacement(
+                eq_triple, base_total, target_attributes, missing_attrs, preferred_attr
+            )
+            if solution:
+                three_replace_solutions.append(solution)
+
+        if three_replace_solutions:
+            three_replace_solutions.sort(key=lambda x: x.get("remaining_points", 0), reverse=True)
+            return [{
+                "num_replacements": 3,
+                "message": "需替換 3 件裝備達成目標",
+                "replacements": three_replace_solutions[0]["replacements"],
+                "new_total": three_replace_solutions[0].get("new_total", {})
+            }]
+
+        # 嘗試替換 4 件
+        four_replace_solutions = []
+        for eq_quad in iter_combinations(replaceable, 4):
+            solution = self._try_multi_replacement(
+                eq_quad, base_total, target_attributes, missing_attrs, preferred_attr
+            )
+            if solution:
+                four_replace_solutions.append(solution)
+
+        if four_replace_solutions:
+            four_replace_solutions.sort(key=lambda x: x.get("remaining_points", 0), reverse=True)
+            return [{
+                "num_replacements": 4,
+                "message": "需替換 4 件裝備達成目標",
+                "replacements": four_replace_solutions[0]["replacements"],
+                "new_total": four_replace_solutions[0].get("new_total", {})
+            }]
+
+        # 嘗試替換全部 5 件
+        if len(replaceable) == 5:
+            solution = self._try_multi_replacement(
+                tuple(replaceable), base_total, target_attributes, missing_attrs, preferred_attr
+            )
+            if solution:
+                return [{
+                    "num_replacements": 5,
+                    "message": "需替換 5 件裝備達成目標",
+                    "replacements": solution["replacements"],
+                    "new_total": solution.get("new_total", {})
+                }]
+
+        # 如果全部替換都無法達成，返回空（表示需要入手新裝備）
+        return []
+
+    def _try_single_replacement(self, eq: Dict, base_total: Dict,
+                                 target_attributes: Dict, missing_attrs: Dict,
+                                 preferred_attr: Optional[str] = None) -> Optional[Dict]:
+        """嘗試替換單件裝備，返回能達成目標的方案
+
+        Args:
+            eq: 要被替換的裝備
+            base_total: 當前組合的基礎屬性（不含加成）
+            target_attributes: 目標屬性
+            missing_attrs: 缺少的屬性
+            preferred_attr: 偏好屬性
+        """
+        eq_type = eq["type"]
+        eq_attrs = eq.get("attributes", {})
+
+        # 獲取所有候選替換配置
+        candidate_configs = self._find_replacement_configs(
+            eq_type, target_attributes
+        )
+
+        if not candidate_configs:
+            return None
+
+        # 嘗試每個配置，找到能達成目標的
+        best_result = None
+        best_remaining = float('-inf')
+
+        for config in candidate_configs:
+            # 使用輔助函數計算替換後的基礎屬性
+            new_base = self._calculate_base_after_replacement(base_total, eq_attrs, config["attributes"])
+
+            # 計算最佳加成分配（考慮偏好屬性）
+            bonus_allocation = self._calculate_optimal_bonuses(new_base, target_attributes, preferred_attr)
+
+            # 使用輔助函數應用加成和碎片修正
+            final_total = self._apply_bonuses_and_corrections(new_base, bonus_allocation)
+
+            # 使用輔助函數檢查是否達成所有目標
+            all_met, _ = self._check_targets_met(final_total, target_attributes)
+
+            if all_met:
+                # 計算剩餘點數（目標達成後的溢出）
+                remaining = 0
+                for attr, target_val in target_attributes.items():
+                    remaining += final_total.get(attr, 0) - target_val
+
+                if remaining > best_remaining:
+                    best_remaining = remaining
+                    best_result = {
+                        "replace_type": eq_type,
+                        "original_name": eq.get("name", "未知"),
+                        "name": f"{config['tag']}_{eq_type}",
+                        "type": eq_type,
+                        "tag": config["tag"],
+                        "random_stat": config["random_stat"],
+                        "locked_attr": config["locked_attr"],
+                        "attributes": config["attributes"],
+                        "new_total": final_total,
+                        "can_achieve": True,
+                        "remaining_points": remaining
+                    }
+
+        if best_result:
+            return best_result
+
+        # 如果沒有找到能達成目標的配置，返回改善最多的
+        # 使用第一個配置作為默認
+        best_replacement = candidate_configs[0]
+
+        # 使用輔助函數計算替換後的基礎屬性
+        new_base = self._calculate_base_after_replacement(base_total, eq_attrs, best_replacement["attributes"])
+
+        # 計算最佳加成分配（考慮偏好屬性）
+        bonus_allocation = self._calculate_optimal_bonuses(new_base, target_attributes, preferred_attr)
+
+        # 使用輔助函數應用加成和碎片修正
+        final_total = self._apply_bonuses_and_corrections(new_base, bonus_allocation)
+
+        # 使用輔助函數檢查是否達成所有目標
+        all_met, _ = self._check_targets_met(final_total, target_attributes)
+
+        if not all_met:
+            # 計算改善程度（用於排序）
+            # 計算原本加成後的屬性
+            old_bonus = self._calculate_optimal_bonuses(base_total, target_attributes, preferred_attr)
+            old_final = base_total.copy()
+            for attr, bonus_count in old_bonus.items():
+                old_final[attr] = old_final.get(attr, 0) + bonus_count * 10
+
+            improvement = 0
+            for attr, missing in missing_attrs.items():
+                old_val = old_final.get(attr, 0)
+                new_val = final_total.get(attr, 0)
+                improvement += (new_val - old_val)
+
+            return {
+                "replace_type": eq_type,
+                "original_name": eq.get("name", "未知"),
+                "name": f"{best_replacement['tag']}_{eq_type}",
+                "type": eq_type,
+                "tag": best_replacement["tag"],
+                "random_stat": best_replacement["random_stat"],
+                "locked_attr": best_replacement["locked_attr"],
+                "attributes": best_replacement["attributes"],
+                "new_total": final_total,
+                "can_achieve": False,
+                "remaining_points": improvement
+            }
+
+        # 計算剩餘點數（目標達成後的溢出）
+        remaining = 0
+        for attr, target_val in target_attributes.items():
+            remaining += final_total.get(attr, 0) - target_val
+
+        return {
+            "replace_type": eq_type,
+            "original_name": eq.get("name", "未知"),
+            "name": f"{best_replacement['tag']}_{eq_type}",
+            "type": eq_type,
+            "tag": best_replacement["tag"],
+            "random_stat": best_replacement["random_stat"],
+            "locked_attr": best_replacement["locked_attr"],
+            "attributes": best_replacement["attributes"],
+            "new_total": final_total,
+            "can_achieve": True,
+            "remaining_points": remaining
+        }
+
+    def _try_multi_replacement(self, eq_list: tuple, base_total: Dict,
+                                target_attributes: Dict, missing_attrs: Dict,
+                                preferred_attr: Optional[str] = None) -> Optional[Dict]:
+        """嘗試替換多件裝備，返回能達成目標的方案
+
+        Args:
+            eq_list: 要被替換的裝備列表
+            base_total: 當前組合的基礎屬性（不含加成）
+            target_attributes: 目標屬性
+            missing_attrs: 缺少的屬性
+            preferred_attr: 偏好屬性
+        """
+        # 計算移除所有裝備後的基礎屬性
+        total_after_removal = {}
+        for attr in EQUIPMENT_ATTRIBUTES:
+            val = base_total.get(attr, 0)
+            for eq in eq_list:
+                val -= eq.get("attributes", {}).get(attr, 0)
+            total_after_removal[attr] = val
+
+        # 獲取每個部位的所有可能配置
+        all_configs = []
+        for eq in eq_list:
+            configs = self._find_replacement_configs(eq["type"], target_attributes)
+            if not configs:
+                return None
+            all_configs.append((eq, configs))
+
+        # 限制每個部位的配置數量以避免組合爆炸
+        # 對於3件以上，使用更少的配置
+        num_slots = len(eq_list)
+        if num_slots <= 3:
+            MAX_CONFIGS_PER_SLOT = 15
+        elif num_slots == 4:
+            MAX_CONFIGS_PER_SLOT = 8
+        else:
+            MAX_CONFIGS_PER_SLOT = 5
+
+        limited_configs = []
+        for eq, configs in all_configs:
+            limited_configs.append((eq, configs[:MAX_CONFIGS_PER_SLOT]))
+
+        # 使用笛卡爾積嘗試所有配置組合
+        config_lists = [configs for _, configs in limited_configs]
+
+        best_result = None
+        best_remaining = float('-inf')
+
+        for combo in product(*config_lists):
+            # 計算替換後的總屬性
+            new_total = total_after_removal.copy()
+            for replacement in combo:
+                for attr in EQUIPMENT_ATTRIBUTES:
+                    new_total[attr] = new_total.get(attr, 0) + replacement["attributes"].get(attr, 0)
+
+            # 計算最佳加成分配（考慮偏好屬性）
+            bonus_allocation = self._calculate_optimal_bonuses(new_total, target_attributes, preferred_attr)
+
+            # 使用輔助函數應用加成和碎片修正
+            final_total = self._apply_bonuses_and_corrections(new_total, bonus_allocation)
+
+            # 使用輔助函數檢查是否達成所有目標
+            all_met, _ = self._check_targets_met(final_total, target_attributes)
+
+            if all_met:
+                # 計算剩餘點數
+                remaining = 0
+                for attr, target_val in target_attributes.items():
+                    remaining += final_total.get(attr, 0) - target_val
+
+                if remaining > best_remaining:
+                    best_remaining = remaining
+                    # 構建替換列表
+                    replacements = []
+                    for i, replacement in enumerate(combo):
+                        eq = limited_configs[i][0]
+                        replacements.append({
+                            "replace_type": eq["type"],
+                            "original_name": eq.get("name", "未知"),
+                            "name": f"{replacement['tag']}_{eq['type']}",
+                            "type": eq["type"],
+                            "tag": replacement["tag"],
+                            "random_stat": replacement["random_stat"],
+                            "locked_attr": replacement["locked_attr"],
+                            "attributes": replacement["attributes"]
                         })
-                        existing_types.add(eq_type)
-                        break
-        
-        # 按分數排序，取前3個
-        recommended.sort(key=lambda x: x["score"], reverse=True)
-        return recommended[:3]
-    
+
+                    best_result = {
+                        "replacements": replacements,
+                        "new_total": final_total,
+                        "remaining_points": remaining
+                    }
+
+        return best_result
+
+    def _find_replacement_configs(self, eq_type: str,
+                                   target_attributes: Dict[str, float]) -> List[Dict]:
+        """為指定部位找出所有可能的裝備配置
+
+        Args:
+            eq_type: 裝備類型
+            target_attributes: 目標屬性
+
+        Returns:
+            配置列表，每個配置包含 tag, random_stat, locked_attr, attributes
+        """
+        # 使用緩存鍵
+        cache_key = f"{eq_type}_{tuple(sorted(target_attributes.keys()))}"
+        if cache_key in self._config_cache:
+            return self._config_cache[cache_key]
+
+        configs = []
+
+        # 嘗試所有標籤和隨機詞條的組合
+        for tag, (main_attr, sub_attr) in EQUIPMENT_TAGS.items():
+            # 可用的隨機詞條（不能與主副詞條重複）
+            available_random = [a for a in EQUIPMENT_ATTRIBUTES if a not in [main_attr, sub_attr]]
+
+            # 嘗試每個可能的隨機詞條
+            for random_stat in available_random:
+                # 嘗試每個可能的鎖定屬性（包括不鎖定）
+                lock_options = [None] + list(target_attributes.keys())
+
+                for locked_attr in lock_options:
+                    # 決定懲罰屬性
+                    penalty_attr = None
+                    if locked_attr:
+                        # 優先選擇不在目標屬性中的屬性作為懲罰
+                        for attr in EQUIPMENT_ATTRIBUTES:
+                            if attr != locked_attr and attr not in target_attributes:
+                                penalty_attr = attr
+                                break
+                        # 如果找不到，選擇任意非鎖定屬性
+                        if not penalty_attr:
+                            for attr in EQUIPMENT_ATTRIBUTES:
+                                if attr != locked_attr:
+                                    penalty_attr = attr
+                                    break
+
+                    # 計算滿級屬性
+                    max_attrs = {}
+                    for attr in EQUIPMENT_ATTRIBUTES:
+                        if attr == main_attr:
+                            base_val = 35.0 if attr == locked_attr else 30.0
+                        elif attr == sub_attr:
+                            base_val = 30.0 if attr == locked_attr else 25.0
+                        elif attr == random_stat:
+                            base_val = 25.0 if attr == locked_attr else 20.0
+                        else:
+                            base_val = 10.0 if attr == locked_attr else 5.0
+
+                        # 應用懲罰
+                        if attr == penalty_attr:
+                            base_val -= 5.0
+
+                        max_attrs[attr] = base_val
+
+                    configs.append({
+                        "tag": tag,
+                        "random_stat": random_stat,
+                        "locked_attr": locked_attr,
+                        "attributes": max_attrs
+                    })
+
+        # 按對目標屬性的貢獻排序
+        def calc_score(config):
+            return sum(config["attributes"].get(attr, 0) for attr in target_attributes.keys())
+
+        configs.sort(key=calc_score, reverse=True)
+
+        # 存入緩存
+        self._config_cache[cache_key] = configs
+        return configs
+
     def _calculate_optimal_bonuses(self, base_attributes: Dict[str, float], 
                                    target_attributes: Dict[str, float],
                                    preferred_attr: Optional[str] = None) -> Dict[str, int]:
@@ -935,38 +1152,147 @@ class EquipmentCalculator:
         
         return bonus_allocation
     
-    def _generate_penalty_combinations(self, locked_equipments: List[Equipment]) -> List[Dict[str, str]]:
-        """為有鎖定屬性的裝備生成懲罰屬性組合"""
+    def _generate_penalty_combinations(self, locked_equipments: List[Equipment],
+                                        target_attributes: Dict[str, float] = None) -> List[Dict[str, str]]:
+        """為有鎖定屬性的裝備生成懲罰屬性組合
+
+        Args:
+            locked_equipments: 有鎖定屬性但沒有懲罰屬性的裝備列表
+            target_attributes: 目標屬性，用於優先選擇非目標屬性作為懲罰
+        """
         if not locked_equipments:
             return [{}]
-        
-        # 為每個裝備生成可選的懲罰屬性（排除鎖定屬性本身）
+
+        target_attrs = set(target_attributes.keys()) if target_attributes else set()
+
+        # 為每個裝備生成可選的懲罰屬性
+        # 優先選擇非目標屬性，排除鎖定屬性本身
         equipment_options = []
         for eq in locked_equipments:
-            options = [attr for attr in EQUIPMENT_ATTRIBUTES if attr != eq.locked_attr]
+            # 非目標屬性優先
+            preferred = [attr for attr in EQUIPMENT_ATTRIBUTES
+                        if attr != eq.locked_attr and attr not in target_attrs]
+            # 目標屬性作為備選（不推薦）
+            fallback = [attr for attr in EQUIPMENT_ATTRIBUTES
+                       if attr != eq.locked_attr and attr in target_attrs]
+            # 優先選項在前
+            options = preferred + fallback
             equipment_options.append((eq.id, options))
-        
+
         # 生成所有可能的組合（使用笛卡爾積）
         configs = []
         for combo in product(*[options for _, options in equipment_options]):
             config = {eq_id: combo[i] for i, (eq_id, _) in enumerate(equipment_options)}
             configs.append(config)
-        
+
+        # 按照懲罰目標屬性的數量排序（越少越好）
+        def count_target_penalties(config):
+            return sum(1 for penalty in config.values() if penalty in target_attrs)
+
+        configs.sort(key=count_target_penalties)
+
         return configs
-    
-    def _reapply_lock_effect(self, equipment: Equipment):
-        """臨時應用鎖定效果（當懲罰屬性改變時）
-        
-        注意：此方法會臨時修改裝備的屬性，但由於我們現在不在創建時應用效果，
-        裝備的基礎屬性已經是正確的，所以這裡只需要臨時設置懲罰屬性即可。
-        實際的鎖定和懲罰效果會在 get_max_level_attributes() 中正確計算。
-        
-        此方法現在只是一個佔位符，實際效果由 get_max_level_attributes() 處理。
+
+    def _evaluate_combination(self, result: Dict, target_attributes: Dict[str, float],
+                              preferred_attr: Optional[str], best_score: float,
+                              best_equipment_count: int, best_preferred_value: float,
+                              exotic_equipment: Optional[Dict]) -> Dict:
+        """評估組合是否比當前最佳更好
+
+        Args:
+            result: calculate_combination 的結果
+            target_attributes: 目標屬性
+            preferred_attr: 偏好屬性
+            best_score: 當前最佳分數
+            best_equipment_count: 當前最佳裝備數量
+            best_preferred_value: 當前最佳偏好屬性值
+            exotic_equipment: 異域裝備
+
+        Returns:
+            評估結果字典，包含 is_better, score, all_met, preferred_value,
+            equipment_count, final_attributes, bonus_allocation
         """
-        # 不再需要修改裝備屬性，因為鎖定和懲罰效果只在計算時應用
-        # 只需要確保 penalty_attr 被設置即可
-        pass
-    
+        # 計算最佳加成分配
+        bonus_allocation = self._calculate_optimal_bonuses(
+            result["total_attributes"], target_attributes, preferred_attr
+        )
+
+        # 應用加成到總屬性
+        final_attributes = result["total_attributes"].copy()
+        for attr, bonus_count in bonus_allocation.items():
+            final_attributes[attr] = final_attributes.get(attr, 0) + bonus_count * 10
+
+        # 應用碎片修正
+        if hasattr(self, '_fragment_corrections') and self._fragment_corrections:
+            for attr, correction in self._fragment_corrections.items():
+                final_attributes[attr] = final_attributes.get(attr, 0) + correction
+
+        # 計算與目標的差距
+        score = 0
+        all_met = True
+        target_attr_set = set(target_attributes.keys())
+
+        for target_attr, target_value in target_attributes.items():
+            actual_value = final_attributes.get(target_attr, 0)
+            if actual_value < target_value:
+                all_met = False
+                score += (target_value - actual_value) ** 2
+            else:
+                score += (actual_value - target_value) * 0.1
+
+        # 懲罰在非目標屬性上的浪費
+        # 非目標屬性的數值都是浪費，因為總點數有限
+        waste_penalty = 0
+        for attr in EQUIPMENT_ATTRIBUTES:
+            if attr not in target_attr_set:
+                value = final_attributes.get(attr, 0)
+                # 基礎補充詞條(每件5點，5件=25點)是不可避免的，超過的部分才是浪費
+                base_supplement = 25  # 5件裝備的補充詞條總和
+                if value > base_supplement:
+                    waste_penalty += (value - base_supplement) * 1.5
+
+        score += waste_penalty
+
+        # 獲取偏好屬性值
+        preferred_value = final_attributes.get(preferred_attr, 0) if preferred_attr else 0
+
+        # 獲取當前組合的裝備數量
+        current_equipment_count = result["equipment_count"]
+
+        # 選擇最佳組合
+        is_better = False
+        if all_met:
+            if best_score == float('inf'):
+                is_better = True
+            elif best_score > 0:
+                is_better = True
+            elif best_score == 0:
+                if current_equipment_count > best_equipment_count:
+                    is_better = True
+                elif current_equipment_count == best_equipment_count:
+                    if preferred_attr:
+                        if preferred_value > best_preferred_value:
+                            is_better = True
+                    else:
+                        if score < best_score:
+                            is_better = True
+        else:
+            if score < best_score:
+                is_better = True
+            elif best_score != float('inf') and abs(score - best_score) < 10:
+                if current_equipment_count > best_equipment_count:
+                    is_better = True
+
+        return {
+            "is_better": is_better,
+            "score": score if not all_met else 0,
+            "all_met": all_met,
+            "preferred_value": preferred_value,
+            "equipment_count": current_equipment_count,
+            "final_attributes": final_attributes,
+            "bonus_allocation": bonus_allocation
+        }
+
     def format_target_result(self, result: Dict) -> str:
         """格式化目標匹配結果為可讀字符串"""
         lines = []
@@ -978,7 +1304,15 @@ class EquipmentCalculator:
         lines.append("\n【目標屬性】")
         for attr, value in result.get("target_attributes", {}).items():
             lines.append(f"  {attr}: {value:.0f}")
-        
+
+        # 顯示碎片修正（如果有）
+        fragment_corrections = result.get("fragment_corrections", {})
+        if fragment_corrections:
+            lines.append("\n【碎片修正】")
+            for attr, correction in fragment_corrections.items():
+                sign = "+" if correction > 0 else ""
+                lines.append(f"  {attr}: {sign}{correction:.0f}")
+
         if result.get("found"):
             # 找到組合
             lines.append(f"\n✓ {result.get('message', '找到裝備組合')}")
@@ -1007,13 +1341,24 @@ class EquipmentCalculator:
         else:
             # 未找到組合
             lines.append(f"\n✗ {result.get('message', '無法找到裝備組合')}")
-            
-            # 顯示最佳組合（如果有的話）
+
+            # 先顯示當前總屬性（在訊息下方）
             if "best_result" in result:
-                lines.append("\n【最接近的組合】")
-                formatted = self.format_result(result["best_result"])
-                lines.append(formatted)
-                
+                best_result = result["best_result"]
+                total_attrs = best_result.get("total_attributes", {})
+                if total_attrs:
+                    lines.append("\n【當前總屬性】")
+                    for attr in EQUIPMENT_ATTRIBUTES:
+                        value = total_attrs.get(attr, 0)
+                        if value > 0:
+                            lines.append(f"  {attr}: {value:.0f}")
+
+                # 顯示缺少的屬性（已考慮加成）
+                if "missing_attributes" in result:
+                    lines.append("\n【缺少的屬性（已考慮加成）】")
+                    for attr, value in result["missing_attributes"].items():
+                        lines.append(f"  {attr}: 還需要 {value:.0f}")
+
                 # 顯示數值加成分配（如果有）
                 if "bonus_allocation" in result and result["bonus_allocation"]:
                     lines.append("\n【數值加成分配（5個加成，每個+10）】")
@@ -1024,35 +1369,62 @@ class EquipmentCalculator:
                             total_bonuses += bonus_count
                     if total_bonuses < 5:
                         lines.append(f"  剩餘 {5 - total_bonuses} 個加成未分配")
-                
-                # 顯示缺少的屬性（已考慮加成）
-                if "missing_attributes" in result:
-                    lines.append("\n【缺少的屬性（已考慮加成）】")
-                    for attr, value in result["missing_attributes"].items():
-                        lines.append(f"  {attr}: 還需要 {value:.0f}")
-            
-            # 顯示所需裝備（倉庫中沒有的推薦裝備）
+
+                # 顯示最接近的組合
+                lines.append("\n【最接近的組合】")
+                formatted = self.format_result(best_result)
+                lines.append(formatted)
+
+            # 顯示替換建議
             if "required_equipments" in result and result["required_equipments"]:
-                lines.append("\n【推薦裝備（倉庫中沒有的，最多3個）】")
-                for i, req_eq in enumerate(result["required_equipments"], 1):
-                    lines.append(f"\n  {i}. {req_eq['name']} ({req_eq['type']})")
-                    if req_eq.get('tag'):
-                        main_attr, sub_attr = EQUIPMENT_TAGS[req_eq['tag']]
-                        lines.append(f"     標籤: {req_eq['tag']} (主詞條: {main_attr}, 副詞條: {sub_attr})")
-                    if req_eq.get('random_stat'):
-                        lines.append(f"     隨機詞條: {req_eq['random_stat']}")
-                    if req_eq.get('locked_attr'):
-                        lines.append(f"     鎖定屬性: {req_eq['locked_attr']} (+5)")
-                    lines.append(f"     滿級屬性:")
-                    for attr, value in sorted(req_eq.get('attributes', {}).items(), 
-                                            key=lambda x: x[1], reverse=True):
-                        if value > 0:
-                            lines.append(f"       {attr}: {value:.0f}")
-                    lines.append(f"     對目標屬性的貢獻:")
-                    for attr, value in req_eq.get('contributions', {}).items():
-                        if value > 0:
-                            lines.append(f"       {attr}: +{value:.0f}")
-                    lines.append(f"     總分: {req_eq.get('score', 0):.0f}")
-        
+                for suggestion in result["required_equipments"]:
+                    message = suggestion.get("message", "替換建議")
+                    lines.append(f"\n【{message}】")
+
+                    replacements = suggestion.get("replacements", [])
+                    for i, req_eq in enumerate(replacements, 1):
+                        # 顯示替換信息
+                        lines.append(f"\n  {i}. 替換 {req_eq['replace_type']}: {req_eq['original_name']} → {req_eq['name']}")
+
+                        if req_eq.get('tag'):
+                            main_attr, sub_attr = EQUIPMENT_TAGS[req_eq['tag']]
+                            lines.append(f"     標籤: {req_eq['tag']} (主詞條: {main_attr}, 副詞條: {sub_attr})")
+                        if req_eq.get('random_stat'):
+                            lines.append(f"     隨機詞條: {req_eq['random_stat']}")
+                        if req_eq.get('locked_attr'):
+                            lines.append(f"     鎖定屬性: {req_eq['locked_attr']} (+5)")
+                        lines.append(f"     滿級屬性:")
+                        for attr, value in sorted(req_eq.get('attributes', {}).items(),
+                                                key=lambda x: x[1], reverse=True):
+                            if value > 0:
+                                lines.append(f"       {attr}: {value:.0f}")
+
+                    # 顯示替換後的總屬性（在所有替換裝備之後顯示一次）
+                    # 優先從 suggestion 取，如果沒有則從第一個替換裝備取
+                    new_total = suggestion.get("new_total")
+                    if not new_total and replacements:
+                        new_total = replacements[0].get("new_total")
+
+                    if new_total:
+                        target_attrs = result.get("target_attributes", {})
+                        lines.append(f"\n  【替換後總屬性】")
+                        for attr in EQUIPMENT_ATTRIBUTES:
+                            value = new_total.get(attr, 0)
+                            if value > 0:
+                                if attr in target_attrs:
+                                    target_val = target_attrs[attr]
+                                    status = "✓" if value >= target_val else f"差{target_val - value:.0f}"
+                                    lines.append(f"    {attr}: {value:.0f} ({status})")
+                                else:
+                                    lines.append(f"    {attr}: {value:.0f}")
+            elif "required_equipments" in result:
+                # required_equipments 存在但為空，表示無法通過替換達成目標
+                lines.append("\n【替換建議】")
+                lines.append("  無法通過替換現有裝備達成目標。")
+                lines.append("  可能需要：")
+                lines.append("    - 增加碎片修正數值")
+                lines.append("    - 降低目標屬性要求")
+                lines.append("    - 入手具有更優詞條的裝備")
+
         lines.append("=" * 60)
         return "\n".join(lines)

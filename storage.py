@@ -3,10 +3,15 @@
 """
 import json
 import os
+import logging
+import tempfile
+import shutil
 from typing import Dict, List, Optional
 from equipment import Equipment, EQUIPMENT_ATTRIBUTES
 from classes import GuardianClass
 from config import Config
+
+logger = logging.getLogger(__name__)
 
 
 STORAGE_FILE = Config.EQUIPMENT_STORAGE_FILE
@@ -57,15 +62,45 @@ def dict_to_equipment(data: Dict) -> Equipment:
 
 
 def save_equipments(equipments: List[Equipment]) -> None:
-    """保存裝備列表到文件"""
+    """保存裝備列表到文件（使用原子寫入）"""
     data = {
         "equipments": [equipment_to_dict(eq) for eq in equipments],
         "version": "1.0"
     }
-    
+
+    # 獲取目標文件的目錄
+    target_dir = os.path.dirname(os.path.abspath(STORAGE_FILE))
+
     try:
-        with open(STORAGE_FILE, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        # 創建臨時文件，寫入數據
+        fd, temp_path = tempfile.mkstemp(suffix='.json', dir=target_dir)
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+
+            # 原子性地替換目標文件
+            # Windows 需要先刪除目標文件
+            if os.path.exists(STORAGE_FILE):
+                # 先備份原文件
+                backup_path = STORAGE_FILE + '.bak'
+                shutil.copy2(STORAGE_FILE, backup_path)
+                try:
+                    os.replace(temp_path, STORAGE_FILE)
+                    # 成功後刪除備份
+                    if os.path.exists(backup_path):
+                        os.remove(backup_path)
+                except Exception:
+                    # 失敗時恢復備份
+                    if os.path.exists(backup_path):
+                        shutil.copy2(backup_path, STORAGE_FILE)
+                    raise
+            else:
+                os.replace(temp_path, STORAGE_FILE)
+        except Exception:
+            # 確保清理臨時文件
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            raise
     except Exception as e:
         raise IOError(f"保存裝備數據失敗: {e}")
 
@@ -85,7 +120,7 @@ def load_equipments() -> List[Equipment]:
                 equipment = dict_to_equipment(eq_data)
                 equipments.append(equipment)
             except Exception as e:
-                print(f"警告：加載裝備 {eq_data.get('id', 'unknown')} 失敗: {e}")
+                logger.warning(f"加載裝備 {eq_data.get('id', 'unknown')} 失敗: {e}")
                 continue
         
         return equipments
@@ -93,10 +128,4 @@ def load_equipments() -> List[Equipment]:
         raise IOError(f"讀取裝備數據失敗：JSON 格式錯誤: {e}")
     except Exception as e:
         raise IOError(f"讀取裝備數據失敗: {e}")
-
-
-def clear_storage() -> None:
-    """清空存儲文件"""
-    if os.path.exists(STORAGE_FILE):
-        os.remove(STORAGE_FILE)
 
